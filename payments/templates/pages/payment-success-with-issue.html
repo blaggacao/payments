@@ -1,0 +1,23 @@
+{% extends "templates/web.html" %}
+
+{% block title %}{{ _("Payment with a Problem") }}{% endblock %}
+
+{%- block page_content -%}
+<div class='page-card'>
+	<div class='page-card-head'>
+		<span class='indicator yellow'>
+			{{ _("Problem") }}</span>
+	</div>
+	<p>{{ payment_message or _("Your payment had been issued by your bank, but apparently there was a processing error on our end.") }}</p>
+	<div>
+		<a
+		   href='{{ frappe.form_dict.redirect_to or "/issues" }}'
+		   class='btn btn-primary btn-sm'>
+			{{ _("Contact us") }}
+		</a>
+	</div>
+</div>
+<style>
+{% include "templates/styles/card_style.css" %}
+</style>
+{% endblock %}

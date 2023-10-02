@@ -137,7 +137,7 @@ class PayzenSettings(Document):
 
 		signature = compute_hmac_sha256_signature(
 			self.get_password(
-				fieldname="test_hmac_key" if self.use_sandbox else production_hmac_key,
+				fieldname="test_hmac_key" if self.use_sandbox else "production_hmac_key",
 				raise_exception=False,
 			),
 			data
@@ -238,6 +238,10 @@ def get_gateway_controller(doc):
 	)
 	return gateway_controller
 
+
+def is_already_paid(doc):
+	payment_request = frappe.get_doc("Payment Request", doc)
+	return payment_request.status == "Paid"
 
 def get_form_token(doc, form):
 	gateway_controller = get_gateway_controller(doc)

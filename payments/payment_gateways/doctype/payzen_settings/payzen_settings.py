@@ -115,7 +115,12 @@ class PayzenSettings(Document):
 			)
 
 	def get_payment_url(self, **kwargs):
-		return get_url(f"./payzen_checkout?{urlencode(kwargs)}")
+		url = frappe.get_doc({
+		  "doctype": "Shortener",
+		  "long_url": get_url(f"./payzen_checkout?{urlencode(kwargs)}"),
+		})
+		url.insert(ignore_permissions=True)
+		return url.short_url
 
 	def get_fields_for_rendering_context(self):
 		pubkey = self.test_public_key if self.use_sandbox else self.production_public_key

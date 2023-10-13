@@ -1,6 +1,8 @@
 # Copyright (c) 2021, Frappe Technologies Pvt. Ltd. and Contributors
 # License: MIT. See LICENSE
 
+import json
+
 import frappe
 from frappe import _
 from frappe.utils import cint, flt
@@ -37,7 +39,7 @@ def get_context(context):
 
 		# payzen receives values in the currency's smallest denomination
 		data["amount"] = cint(flt(context["amount"]) * 100)
-		res = get_form_token(context.reference_docname, data)
+		res = get_form_token(context.reference_doctype, context.reference_docname, data)
 
 		if not res.get("status") == "SUCCESS":
 			error_log = frappe.log_error("Payzen form token request error", res)
@@ -55,7 +57,7 @@ def get_context(context):
 		context.client_token = res["answer"]["formToken"]
 		context.amount = data.amount
 
-		gateway_controller = get_gateway_controller(context.reference_docname)
+		gateway_controller = get_gateway_controller(context.reference_doctype, context.reference_docname)
 		settings = frappe.get_doc("Payzen Settings", gateway_controller)
 		context.update(settings.get_fields_for_rendering_context())
 
@@ -70,13 +72,18 @@ def get_context(context):
 		raise frappe.Redirect
 
 @frappe.whitelist(allow_guest=True)
-def make_payment(data, hash, reference_doctype, reference_docname):
-	gateway_controller = get_gateway_controller(reference_docname)
-	data = frappe.get_doc("Payzen Settings", gateway_controller).finalize_payment_request(
+def make_payment(data, hash):
+	_data = frappe._dict(json.loads(data))
+	tx = _data.transactions[0]
+	metadata = frappe._dict(tx.get("metadata"))
+	reference_doctype, reference_docname = metadata.reference_doctype, metadata.reference_docname,
+
+	gateway_controller = get_gateway_controller(reference_doctype, reference_docname)
+	redirects = frappe.get_doc("Payzen Settings", gateway_controller).finalize_payment_request(
 		data,
 		hash,
 		reference_doctype,
 		reference_docname,
 	)
 	frappe.db.commit()
-	return data
+	return redirects

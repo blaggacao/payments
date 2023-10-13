@@ -1,8 +1,5 @@
 $(document).ready(function() {
 
-	var doctype = "{{ reference_doctype }}"
-	var docname = "{{ reference_docname }}"
-
 	KR.onSubmit(paymentData => {
 		/* return values:
 		 * true: kr-post-success-url is called using POST
@@ -16,8 +13,6 @@ $(document).ready(function() {
 			args: {
 				"data": JSON.stringify(paymentData.clientAnswer),
 				"hash": paymentData.hash,
-				"reference_doctype": doctype,
-				"reference_docname": docname,
 			},
 			callback: function(r){
 				if (r.message && r.message.status == "Completed") {

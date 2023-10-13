@@ -70,6 +70,12 @@ class PayzenSettings(Document):
 		)
 		call_hook_method("payment_gateway_enabled", gateway="Payzen-" + self.gateway_name)
 
+	def on_payment_request_submission(self, pr):
+		if not pr.grand_total:
+			frappe.throw(_("Payment amount cannot be 0"))
+		self.validate_transaction_currency(pr.currency)
+		return True
+
 	def set_read_only_fields(self):
 		self.api_url = self.api_urls.get(self.brand)
 		self.static_assets_url = self.static_urls.get(self.brand)

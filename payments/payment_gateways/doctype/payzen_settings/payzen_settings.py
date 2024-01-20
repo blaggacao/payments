@@ -315,4 +315,17 @@ def notification(**kwargs):
 		integration_request.db_set("output", json.dumps(data))
 	else:
 		integration_request.handle_failure(data)
-		
+		try:
+			txDetails = data["transactions"][0]
+			frappe.get_doc(reference_doctype, reference_docname,).run_method(
+				"on_payment_failed",
+				integration_request.status,
+				f"{txDetails.get('detailedErrorCode', 'NO ERROR CODE')}: {txDetails.get('detailedErrorCode', 'no detail')}",
+			)
+		except Exception as e:
+			frappe.log_error(
+				"on_payment_failed() failed",
+				frappe.get_traceback(),
+				reference_doctype,
+				reference_docname,
+			)

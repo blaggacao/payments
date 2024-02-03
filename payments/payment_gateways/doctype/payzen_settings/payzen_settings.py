@@ -82,14 +82,13 @@ class PayzenSettings(Document):
 
 	def validate_payzen_credentials(self):
 		def make_test_request(auth):
-			return  frappe._dict(make_post_request(
-				url=f"{self.api_url}/V4/Charge/SDKTest",
-				auth=auth,
-				data={"value": "test"}
-			))
+			return frappe._dict(
+				make_post_request(url=f"{self.api_url}/V4/Charge/SDKTest", auth=auth, data={"value": "test"})
+			)
+
 		if self.test_password:
 			try:
-				password=self.get_password(fieldname="test_password")
+				password = self.get_password(fieldname="test_password")
 				result = make_test_request(HTTPBasicAuth(self.shop_id, password))
 				if result.status != "SUCCESS" or result.answer.get("value") != "test":
 					frappe.throw(_("Test credentials seem not valid."))
@@ -98,13 +97,12 @@ class PayzenSettings(Document):
 
 		if self.production_password:
 			try:
-				password=self.get_password(fieldname="production_password")
+				password = self.get_password(fieldname="production_password")
 				result = make_test_request(HTTPBasicAuth(self.shop_id, password))
 				if result.status != "SUCCESS" or result.answer.get("value") != "test":
 					frappe.throw(_("Production credentials seem not valid."))
 			except Exception:
 				frappe.throw(_("Could not validate production credentials."))
-
 
 	def validate_transaction_currency(self, currency):
 		if currency not in self.supported_currencies:
@@ -115,10 +113,12 @@ class PayzenSettings(Document):
 			)
 
 	def get_payment_url(self, **kwargs):
-		url = frappe.get_doc({
-		  "doctype": "Shortener",
-		  "long_url": get_url(f"./payzen_checkout?{urlencode(kwargs)}"),
-		})
+		url = frappe.get_doc(
+			{
+				"doctype": "Shortener",
+				"long_url": get_url(f"./payzen_checkout?{urlencode(kwargs)}"),
+			}
+		)
 		url.insert(ignore_permissions=True)
 		return url.short_url
 
@@ -129,8 +129,6 @@ class PayzenSettings(Document):
 			"header_img": self.header_img,
 			"kr_public_key": f"{self.shop_id}:{pubkey}",
 		}
-
-
 
 	def finalize_payment_request(self, data, hash, reference_doctype, reference_docname):
 		key = self.get_password(
@@ -147,7 +145,10 @@ class PayzenSettings(Document):
 		if hash != signature:
 			return {"redirect_to": "payment-failed", "status": "Error"}
 
-		integration_request = frappe.get_last_doc("Integration Request", filters={"reference_doctype": reference_doctype, "reference_docname": reference_docname})
+		integration_request = frappe.get_last_doc(
+			"Integration Request",
+			filters={"reference_doctype": reference_doctype, "reference_docname": reference_docname},
+		)
 		metadata = frappe._dict(json.loads(integration_request.data).get("metadata"))
 
 		redirect_to = metadata.get("redirect_to") or None
@@ -156,19 +157,22 @@ class PayzenSettings(Document):
 		if not redirect_to:
 			try:
 				redirect_to = frappe.get_doc(
-					reference_doctype, reference_docname,
+					reference_doctype,
+					reference_docname,
 				).run_method("on_payment_authorized_redirect")
-			except:
-    				pass
+			except Exception:
+				pass
 
 		if integration_request.status == "Completed" or validatedOrderStatus == "PAID":
-		 	status = "Completed"
-		 	redirect_url = "payment-success?doctype={}&docname={}".format(reference_doctype, reference_docname)
-		 	redirect_message = redirect_message or _(f"Your {reference_doctype} ({reference_docname}) was successfully paid.")
+			status = "Completed"
+			redirect_url = f"payment-success?doctype={reference_doctype}&docname={reference_docname}"
+			redirect_message = redirect_message or _(
+				f"Your {reference_doctype} ({reference_docname}) was successfully paid."
+			)
 		elif validatedOrderStatus == "RUNNING":
 			status = "Running"
 			redirect_url = "payment-running"
-		else: # UNPAID / ABANDONED
+		else:  # UNPAID / ABANDONED
 			status = "Error"
 			redirect_url = "payment-failed"
 
@@ -204,7 +208,9 @@ def get_form_token(reference_doctype, reference_docname, form):
 		},
 		"strongAuthentication": settings.challenge_3ds,
 		"contrib": f"ERPNext/{gateway_controller}",
-		"ipnTargetUrl": get_url("./api/method/payments.payment_gateways.doctype.payzen_settings.payzen_settings.notification"),
+		"ipnTargetUrl": get_url(
+			"./api/method/payments.payment_gateways.doctype.payzen_settings.payzen_settings.notification"
+		),
 		"metadata": {
 			"reference_doctype": reference_doctype,
 			"reference_docname": reference_docname,
@@ -224,7 +230,10 @@ def get_form_token(reference_doctype, reference_docname, form):
 			reference_docname=reference_docname,
 		)
 	else:
-		integration_request = frappe.get_last_doc("Integration Request", filters={"reference_doctype": reference_doctype, "reference_docname": reference_docname})
+		integration_request = frappe.get_last_doc(
+			"Integration Request",
+			filters={"reference_doctype": reference_doctype, "reference_docname": reference_docname},
+		)
 
 	res = make_post_request(
 		url=integration_request.url,
@@ -233,12 +242,13 @@ def get_form_token(reference_doctype, reference_docname, form):
 			settings.get_password(
 				fieldname="test_password" if settings.use_sandbox else "production_password",
 				raise_exception=False,
-			)
+			),
 		),
 		json=data,
 	)
 
 	return res
+
 
 def compute_hmac_sha256_signature(key, message):
 	"""
@@ -249,6 +259,7 @@ def compute_hmac_sha256_signature(key, message):
 	message = str.encode(message)
 	signature = hmac.new(byte_key, message, hashlib.sha256).hexdigest()
 	return signature
+
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])
 def notification(**kwargs):
@@ -279,7 +290,10 @@ def notification(**kwargs):
 
 	# Answer is valid
 
-	integration_request = frappe.get_last_doc("Integration Request", filters={"reference_doctype": reference_doctype, "reference_docname": reference_docname})
+	integration_request = frappe.get_last_doc(
+		"Integration Request",
+		filters={"reference_doctype": reference_doctype, "reference_docname": reference_docname},
+	)
 	if integration_request.status == "Completed":
 		return
 
@@ -287,7 +301,8 @@ def notification(**kwargs):
 		integration_request.handle_success(data)
 		try:
 			frappe.get_doc(
-				reference_doctype, reference_docname,
+				reference_doctype,
+				reference_docname,
 			).run_method("on_payment_authorized", integration_request.status)
 		except Exception as e:
 			frappe.log_error(

@@ -320,7 +320,7 @@ def notification(**kwargs):
 			frappe.get_doc(reference_doctype, reference_docname,).run_method(
 				"on_payment_failed",
 				integration_request.status,
-				f"{txDetails.get('detailedErrorCode', 'NO ERROR CODE')}: {txDetails.get('detailedErrorCode', 'no detail')}",
+				f"{txDetails.get('detailedErrorCode', 'NO ERROR CODE')}: {txDetails.get('detailedErrorMessage', 'no detail')}",
 			)
 		except Exception as e:
 			frappe.log_error(

@@ -3,6 +3,8 @@
 
 import json
 
+import urllib.parse
+
 import frappe
 from frappe import _
 from frappe.utils import cint, flt
@@ -33,7 +35,7 @@ def get_context(context):
 	# all these keys exist in form_dict
 	if not (set(expected_keys) - set(list(frappe.form_dict))):
 		for key in expected_keys:
-			context[key] = frappe.form_dict[key]
+			context[key] = urllib.parse.unquote(frappe.form_dict[key])
 
 		data = frappe.form_dict.copy()
 
@@ -64,19 +66,21 @@ def get_context(context):
 	else:
 		frappe.redirect_to_message(
 			_("Some information is missing"),
-			_(
-				"Looks like someone sent you to an incomplete URL. Please ask them to look into it."
-			),
+			_("Looks like someone sent you to an incomplete URL. Please ask them to look into it."),
 		)
 		frappe.local.flags.redirect_location = frappe.local.response.location
 		raise frappe.Redirect
+
 
 @frappe.whitelist(allow_guest=True)
 def make_payment(data, hash):
 	_data = frappe._dict(json.loads(data))
 	tx = _data.transactions[0]
 	metadata = frappe._dict(tx.get("metadata"))
-	reference_doctype, reference_docname = metadata.reference_doctype, metadata.reference_docname,
+	reference_doctype, reference_docname = (
+		metadata.reference_doctype,
+		metadata.reference_docname,
+	)
 
 	gateway_controller = get_gateway_controller(reference_doctype, reference_docname)
 	redirects = frappe.get_doc("Payzen Settings", gateway_controller).finalize_payment_request(

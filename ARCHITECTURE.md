@@ -1,63 +1,74 @@
 # Architecture
 
-The Payment app provides an abstract payment controller and specific implementations for a growing number of Payment Gateways inside the _Payment Gateways_ module.
+The Payment app provides an abstract payment controller and specific implementations for a growing number of gateways.
+These implementations are located inside the _Payment Gateways_ module.
 
-An additional _Payment Gateway_ doctype inside the _Payment_ module serves as the generic link target referencing and dispatching to the respective payment gateway controller and settings.
+Inside the _Payment_ module, an additional _Payment Gateway_ DocType serves as the link target to a reference DocType (RefDoc, see below) for the respective payment gateway controller and settings. For example, the _Payment Request_ DocType links to this _Payment Gateway_ in order to implement its payment flow.
 
-The app adds custom fields to the Web Form for facilitating payments upon installation and removes them upon uninstallation.
+Furthermore, upon installation, the app adds custom fields to the Web Form for facilitating web form based payments and removes them upon uninstallation.
 
 ## Relation between RefDoc and Payment Gateway Controller
 
-A reference document implements the surrounding business logic, links to the _Payment Gateway_, and hands over - typically on submit - to the specific payment gateway controller for initiating and handling the transaction. After the transaction has been handled, the reference document may execute post-processing on the result and/or remit a specific payload (e.g., redirect link / success message) to the user via the payment gateway controller.
+The reference document implements the surrounding business logic, links to the _Payment Gateway_, and hands over - typically on submit - to the specific payment gateway controller for initiating and handling the transaction.
 
-During the entire lifecycle of a payment, state is maintained on the _Integration Request_ doctype. It allows persisting free-form data and otherwise serves as a central log for interaction with remote systems.
+After the transaction has been handled, the reference document may execute post-processing on the result and/or remit a specific payload (e.g., redirect link / success message) to the payment gateway controller in order to forward it to the client.
 
-### TX Data and TX Reference
+During the entire lifecycle of a payment, state is maintained on the _Integration Request_ DocType. It allows persisting free-form data and serves as a central log for interaction with remote systems.
 
-The data is passed from the RefDoc to the Payment Gateway Controller via a standardized data structure called _TX Data_.
+### TX Data, TX Reference and Correlation ID
+
+The data is passed from the RefDoc to the Payment Gateway Controller via a standardized data structure called _Req Data_.
 
 Then, all transaction lifecycle state is stored into an _Integration Request_.
 
-The _Name_ of the _Integration Request_ will be the system's unique _TX Reference_.
+The _Name_ of the _Integration Request_ will be the system's unique _TX Reference_ to identify a payment transaction across its lifecycle and needs to be always passed around between the server, the client and remote systems. It may be typically stored in a gateway's request metadata in such a way that it is always returned by the remote server in order to reliably identify the transaction.
 
-It is not a payment gateway's _Correlation ID_ (the Sales Order Name could be one); however, the _TX Reference_ should be carried in all requests across the lifecycle to easily identify the transaction in the backend, for example, by using a payment gateway's meta fields. (Use the _Integration Request's_ `request_id` as _Correlation ID_, instead.)
+A payment gateway's _Correlation ID_, if available, is set as the _Integration Request_'s `request_id`. If a gateway uses it for fault-tolerant deduplication, a controller should send this ID to the remote server in any request throughout the remainder of a TX lifecycle.
+
+If the remote server only returns a _Correlation ID_ but is unable to carry the _Integration Request_ name, then implementations can work around and recover the _Integration Request_ name, which is required by the controller methods, by filtering integration requests on `{"request_id": correlation_id}`.
 
 ### RefDoc Flow
 
-1. Call the payment gateway controller's `on_refdoc_submit` hook with `tx_data` (for validation).
-2. Call the payment gateway controller's `initiate_payment` method with `tx_data` and store the _Integration Request_ name.
-3. Call the payment gateway controller's `is_user_flow_initiation_delegated` predicate with `integration_request_name`.
+1. Call the payment gateway controller's `on_refdoc_submission` hook with `tx_data` (for validation).
+2. Call the payment gateway controller's `initiate_payment` method with `tx_data` and store the returned _Integration Request_ name on the RefDoc.
+3. Call the payment gateway controller's `is_user_flow_initiation_delegated` method with `integration_request_name`.
 4. If user flow initiation is not delegated (to the payment gateway): initiate/continue user flow, e.g., via Email, SMS, WhatsApp, Phone Call, etc.
-5. Postprocess the payment status change via `on_{mandate,charge}_<status>` with a two-fold goal:
-   - Continue business logic
-   - Return business-logic-specific payload (e.g., message / redirect instructions) to the payment gateway controller
+5. post-process the payment status change via `on_payment_{mandate_acquisition,mandated_charge,charge}_processed` with a two-fold goal:
+   - Continue business logic in the backend
+   - Optional: return business-logic-specific `{"message": ..., "action": ..., "payload": ...}` to the payment gateway controller, where:
+     - `message` is shown to the used
+     - `action` is a client action, e.g. `{"redirect_to": "/my/special/path"}`
+     - `payload` any custom payload that can be manipulated by the checkout page, usually `None`
+     - If nothing is returned, the gateway's (if implemented) or app's standard is used
 
 ### Payment Gateway Controller Flow
 
-The payment gateway controller flow knows the following generic flow variants:
+The payment gateway controller flow has knowledge of the following flow variants:
 
 - Charge: a single payment
 - Mandate Acquisition: acquire a mandate for present or future mandated charges
 - Mandated Charge: a single payment that requires little or no user interaction thanks to a mandate
 
-The distinguishing factor is that a mandate represents some sort of pre-authorization for a future (mandated) charge. It can be used in diverse use cases such as:
+A mandate represents some sort of pre-authorization for a future (mandated) charge. It can be used in diverse use cases such as:
 
 - Subscription
 - SEPA Mandate
 - Preauthorized Charge ("hotel booking")
 - Tokenized Charge ("one-click checkout")
 
-Therefore, the flow needs to decide which route to take, and it looks like this:
+Taking the flow variants into account, the high level control flow looks like this:
 
-1. Eventually throw on `on_refdoc_submit` execution, if there's an issue.
-2. Decide whether to initiate a Charge, a Mandate Acquisition, or a Mandated Charge. Mandate Acquisition is typically implemented as a pre-processing step of a (the first) Mandated Charge.
+1. Eventually throw on `on_refdoc_submission` execution, if there's an issue.
+2. Decide whether to initiate a Charge, a Mandate Acquisition, or a Mandated Charge. Mandate Acquisition is typically implemented as a pre-processing step of a Mandated Charge.
+3. Initiate the flow via the dedicated method `initiate_payment` and a _TX Data_ appropriate for the selected flow.
 3. Wait for the user GO signal (e.g., via link, call, SMS, click), then `proceed`. We delay remote interactions as much as possible in order to:
    - Initialize timeouts as late as possible
-   - Offer the customer choices until the last possible moment
-4. Initiate the flow via the dedicated method `initiate_{charge,mandated_charge,mandate_acquisition}`.
+   - Offer the customer choices until the last possible moment (among others: mandate vs charge)
+   - The controller can change the _TX Data_ with the user input
 5. Manage the capturing user flow in collaboration with the payment gateway.
-6. Process the result via the dedicated method `process_response_for_{charge,mandated_charge,mandate_acquisition}`.
-7. Invoke the RefDoc's `on_payment_{mandate_acquisition,mandated_charge,charge}_processed(<status>)` method and manage the finalization user flow (e.g., via message and redirect).
+6. Process the result via the dedicated method `process_response_for_{charge,mandated_charge,mandate_acquisition}`:
+   - Validate the response payload via `_validate_response_payload`, for example, check the integrity of the message against a pre-shared key.
+7. Invoke the RefDoc's `on_payment_{mandate_acquisition,mandated_charge,charge}_processed()` method and manage the finalization user flow (e.g., via message and redirect).
 
 ### Schematic Overview
 
@@ -125,13 +136,13 @@ This accommodates the case that the server-to-server response comes in first, ye
 
 ### And my Payment URL?
 
-The payment URL is simply a well-known concatenation as follows and is one of the alternatives with which the user gives the GO signal to the Payment Gateway controller flow.
+The payment URL is a well-known URL with a `ref` query parameter and the page at that URL can be used for capturing the user's GO signal to the Payment Gateway controller flow.
 
 It is kept short, tidy, and gateway-agnostic as a means to impress succinct trustworthiness on the user.
 
-Format: `https://my.site.tld/checkout?ref=<TX Reference>`.
+Format: `https://my.site.tld/pay?ref=<TX Reference>`.
 
-It is the responsibility of `/checkout` to recover `TX Data` and the corresponding gateway controller from the `TX Reference` (from `integration_request_service` field).
+It is the responsibility of `/pay` to recover `TX Data` from the `TX Reference` and the corresponding gateway controller from the `integration_request_service` field of the _Integration Request_.
 
 ## Other Folders
 

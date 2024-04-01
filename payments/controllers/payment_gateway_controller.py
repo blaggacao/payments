@@ -125,8 +125,9 @@ class PaymentGatewayController(Document):
 		integration_request_name (str): The unique integration request reference
 
 		Returns:
-		bool: Wether the reference document should initiate communication regarding the payment either automatically or
-		      through a system user (e.g. make a phone call).
+		bool: Wether the reference document should initiate communication regarding the payment.
+		      The reference document can do so either automatically or backend user (e.g. make a phone call).
+		      If false, the entire flow is independently initiated by the gateway.
 		"""
 		return False
 
@@ -199,7 +200,7 @@ class PaymentGatewayController(Document):
 			if self._should_have_mandate() and not self.mandate:
 				self.state.mandate = self._create_mandate()
 				correlation_id, payload = InitiateReturnData(**self._initiate_mandate_acquisition())
-				integration_request.db_set("request_id", correlation_id)
+				integration_request.db_set("request_id", correlation_id, commit=True)
 				integration_request.update_status(
 					{"saved_mandate": self.state.mandate.name}, integration_request.status
 				)
@@ -211,7 +212,7 @@ class PaymentGatewayController(Document):
 				}
 			elif self.state.mandate:
 				correlation_id, payload = InitiateReturnData(**self._initiate_mandated_charge())
-				integration_request.db_set("request_id", correlation_id)
+				integration_request.db_set("request_id", correlation_id, commit=True)
 				integration_request.update_status(
 					{"saved_mandate": self.state.mandate.name}, integration_request.status
 				)
@@ -341,7 +342,7 @@ class PaymentGatewayController(Document):
 		- self.state.mandate
 
 		Parameters:
-		  integration_request_name (str): 	tx reference (added via and consumed by decorator)
+		  integration_request_name (str): 	tx reference (consumed by decorator)
 		  payload (dict):			return payload from the flow (will be validated by decorator with validate_payload)
 
 		Returns: (None or dict) Indicating the customer facing message and next action (redirect)
@@ -379,6 +380,7 @@ class PaymentGatewayController(Document):
 				)
 		except Exception:
 			error = integration_request.log_error(frappe.get_traceback())
+			integration_request.handle_failure(self.state.response_payload)
 			frappe.redirect_to_message(
 				_("Server Error"),
 				_error_value(error, "mandate acquisition (via ref doc hook)"),
@@ -432,7 +434,7 @@ class PaymentGatewayController(Document):
 		- self.state.mandate
 
 		Parameters:
-		  integration_request_name (str): 	tx reference (added via and consumed by decorator)
+		  integration_request_name (str): 	tx reference (consumed by decorator)
 		  payload (dict):			return payload from the flow (will be validated by decorator with validate_payload)
 
 		Returns: (None or dict) Indicating the customer facing message and next action (redirect)
@@ -449,6 +451,7 @@ class PaymentGatewayController(Document):
 			return_value = self._process_response_for_mandated_charge()
 		except Exception:
 			error = integration_request.log_error(frappe.get_traceback())
+			integration_request.handle_failure(self.state.response_payload)
 			frappe.redirect_to_message(
 				_("Server Error"),
 				_error_value(error, "mandated charge"),
@@ -504,10 +507,10 @@ class PaymentGatewayController(Document):
 		Implementations can read:
 		- self.state.integration_request
 		- self.state.tx_data
-		- self.state.response_paymload
+		- self.state.response_payload
 
 		Parameters:
-		  integration_request_name (str): 	tx reference (added via and consumed by decorator)
+		  integration_request_name (str): 	tx reference (consumed by decorator)
 		  payload (dict):			return payload from the flow (will be validated by decorator with validate_payload)
 
 		Returns: (None or dict) Indicating the customer facing message and next action (redirect)
@@ -523,6 +526,7 @@ class PaymentGatewayController(Document):
 			return_value = self._process_response_for_charge()
 		except Exception:
 			error = integration_request.log_error(frappe.get_traceback())
+			integration_request.handle_failure(self.state.response_payload)
 			frappe.redirect_to_message(
 				_("Server Error"),
 				_error_value(error, "charge"),

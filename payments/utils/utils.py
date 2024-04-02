@@ -7,11 +7,17 @@ from frappe import _
 from contextlib import contextmanager
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+	from payments.controllers.payment_gateway_controller import PaymentGatewayController
+	from frappe.integrations.doctype.integration_request.integration_request import IntegrationRequest
+
 # Key used to identify the integration request on the frappe/erpnext side across its lifecycle
 TX_REFERENCE_KEY = "ref"
 
 
-def get_payment_gateway_controller(payment_gateway):
+def get_payment_gateway_controller(payment_gateway: str) -> "PaymentGatewayController":
 	"""Return payment gateway controller"""
 	gateway = frappe.get_doc("Payment Gateway", payment_gateway)
 	if gateway.gateway_controller is None:
@@ -26,15 +32,19 @@ def get_payment_gateway_controller(payment_gateway):
 			frappe.throw(_("{0} Settings not found").format(payment_gateway))
 
 
-def recover_references(integration_request_name):
-	integration_request = frappe.get_doc("Integration Request", integration_request_name)
+def recover_references(
+	integration_request_name: str,
+) -> ("IntegrationRequest", "PaymentGatewayController"):
+	integration_request: IntegrationRequest = frappe.get_doc(
+		"Integration Request", integration_request_name
+	)
 	pattern = r"^(.+)\[(.+)\]$"
 	doctype, docname = re.fullmatch(pattern, integration_request.integration_request_service).groups()
-	controller = frappe.get_doc(doctype, docname)
+	controller: PaymentGatewayController = frappe.get_doc(doctype, docname)
 	return integration_request, controller
 
 
-def build_context(context, expected_keys, integration_request):
+def build_context(context: dict, expected_keys: list[str], integration_request: str) -> None:
 	integration_request, gateway_controller = recover_references(frappe.form_dict[TX_REFERENCE_KEY])
 	payment_details = json.loads(integration_request.data)
 

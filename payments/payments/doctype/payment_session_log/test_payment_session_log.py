@@ -5,5 +5,5 @@
 import unittest
 
 
-class TestPaymentGatewayIntegrationLog(unittest.TestCase):
+class TestPaymentSessionLog(unittest.TestCase):
 	pass

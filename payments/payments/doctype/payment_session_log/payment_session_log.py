@@ -16,7 +16,7 @@ from payments.types import TxData
 from types import MappingProxyType
 
 
-class PaymentGatewayIntegrationLog(Document):
+class PaymentSessionLog(Document):
 	# begin: auto-generated types
 	# This code is auto-generated. Do not modify anything in this block.
 
@@ -63,13 +63,13 @@ class PaymentGatewayIntegrationLog(Document):
 
 	def load_state(self):
 		return frappe._dict(
-			ilog=MappingProxyType(self.as_dict()),
+			psl=MappingProxyType(self.as_dict()),
 			tx_data=MappingProxyType(json.loads(self.tx_data)),
 		)
 
 	@staticmethod
 	def clear_old_logs(days=90):
-		table = frappe.qb.DocType("Payment Gateway Integration Log")
+		table = frappe.qb.DocType("Payment Session Log")
 		frappe.db.delete(
 			table, filters=(table.modified < (Now() - Interval(days=days))) & (table.status == "Success")
 		)
@@ -86,20 +86,20 @@ def create_log(
 	# method=None,
 	# message=None,
 	# make_new=False,
-) -> PaymentGatewayIntegrationLog:
+) -> PaymentSessionLog:
 	# make_new = make_new or not bool(frappe.flags.request_id)
 
 	# if rollback:
 	# frappe.db.rollback()
 
 	if True:  # make_new:
-		log = frappe.new_doc("Payment Gateway Integration Log")
+		log = frappe.new_doc("Payment Session Log")
 		log.gateway = gateway
 		log.tx_data = frappe.as_json(tx_data)
 		log.status = status
 		log.insert(ignore_permissions=True)
 	else:
-		log = frappe.get_doc("Payment Gateway Integration Log", frappe.flags.request_id)
+		log = frappe.get_doc("Payment Session Log", frappe.flags.request_id)
 
 	# if response_data and not isinstance(response_data, str):
 	# 	response_data = json.dumps(response_data, sort_keys=True, indent=4)
@@ -137,7 +137,7 @@ def resync(method, name, request_data):
 def _retry_job(job: str):
 	frappe.only_for("System Manager")
 
-	doc = frappe.get_doc("Payment Gateway Integration Log", job)
+	doc = frappe.get_doc("Payment Session Log", job)
 	if not doc.method.startswith("payments.payment_gateways.") or doc.status != "Error":
 		return
 

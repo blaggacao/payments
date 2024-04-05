@@ -1,4 +1,4 @@
-frappe.listview_settings["Payment Gateway Integration Log"] = {
+frappe.listview_settings["Payment Session Log"] = {
 	hide_name_column: true,
 	add_fields: ["status"],
 	get_indicator: function (doc) {
@@ -14,7 +14,7 @@ frappe.listview_settings["Payment Gateway Integration Log"] = {
 	onload: function (listview) {
 		listview.page.add_action_item(__("Retry"), () => {
 			listview.call_for_selected_items(
-				"payments.payments.doctype.payment_gateway_integration_log.payment_gateway_integration_log.bulk_retry"
+				"payments.payments.doctype.payment_session_log.payment_session_log.bulk_retry"
 			);
 		});
 	},

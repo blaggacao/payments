@@ -10,7 +10,7 @@ $(document).ready(function() {
 			freeze:true,
 			headers: {"X-Requested-With": "XMLHttpRequest"},
 			args: {
-				"ilog_name": paymentData.metadata.ilog,
+				"psl_name": paymentData.metadata.psl,
 				"payload": {
 					"data":	JSON.stringify(paymentData),
 					"hash": paymentData.hash,

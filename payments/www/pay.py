@@ -9,9 +9,9 @@ from payments.types import Proceeded
 no_cache = 1
 
 
-def get_ilog():
+def get_psl():
 	try:
-		ilog_name = frappe.form_dict[TX_REFERENCE_KEY]
+		psl_name = frappe.form_dict[TX_REFERENCE_KEY]
 	except KeyError:
 		frappe.redirect_to_message(
 			_("Invalid Payment Link"),
@@ -21,14 +21,14 @@ def get_ilog():
 		)
 		# raise frappe.Redirect
 	else:
-		return ilog_name
+		return psl_name
 
 
 def get_context(context):
 
-	ilog_name = get_ilog()
+	psl_name = get_psl()
 
-	# proceeded: Proceeded = PaymentController.proceed(ilog_name, tx_update)
+	# proceeded: Proceeded = PaymentController.proceed(psl_name, tx_update)
 
 	context.gateway_css = """
         <link rel="stylesheet" href="{{ static_assets_url }}/js/krypton-client/V4.0/ext/neon-reset.min.css">

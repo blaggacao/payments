@@ -156,7 +156,7 @@ class Processed:
 # for nicer DX using an LSP
 
 
-class ILogName(str):
+class PSLName(str):
 	"""The name of the primary local reference to identify an ongoing payment gateway flow.
 
 	Interface: Payment Gateway Controller -> Ref Doc -> Payment Gateway Controller

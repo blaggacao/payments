@@ -5,7 +5,7 @@ from urllib.parse import urlencode
 import frappe
 from frappe import _
 from frappe.model.document import Document
-from payments.payments.doctype.payment_gateway_integration_log.payment_gateway_integration_log import (
+from payments.payments.doctype.payment_session_log.payment_session_log import (
 	create_log,
 )
 from frappe.utils import get_url
@@ -18,7 +18,7 @@ from payments.types import (
 	Initiated,
 	TxData,
 	Processed,
-	ILogName,
+	PSLName,
 	PaymentUrl,
 	PaymentMandate,
 	FlowType,
@@ -31,8 +31,8 @@ from payments.types import (
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
-	from payments.payments.doctype.payment_gateway_integration_log.payment_gateway_integration_log import (
-		PaymentGatewayIntegrationLog,
+	from payments.payments.doctype.payment_session_log.payment_session_log import (
+		PaymentSessionLog,
 	)
 	from payments.payments.doctype.payment_gateway.payment_gateway import PaymentGateway
 
@@ -65,16 +65,16 @@ class PaymentController(Document):
 		super(Document, self).__init__(*args, **kwargs)
 		self.state = frappe._dict()
 
-	def load_ilog(ilog_name: ILogName) -> None:
+	def load_psl(psl_name: PSLName) -> None:
 		pass
 
 	@staticmethod
 	def initiate(
 		payment_gateway_name: str, tx_data: TxData, correlation_id: str | None, name: str | None
-	) -> ILogName:
+	) -> PSLName:
 		"""Initiate a payment flow from Ref Doc with the given gateway.
 
-		Inheriting methods can invoke super and then set e.g. correlation_id on self.state.ilog to save
+		Inheriting methods can invoke super and then set e.g. correlation_id on self.state.psl to save
 		and early-obtained correlation id from the payment gateway or to initiate the user flow if delegated to
 		the controller (see: is_user_flow_initiation_delegated)
 		"""
@@ -92,24 +92,24 @@ class PaymentController(Document):
 			gateway.gateway_controller or gateway.gateway_settings,  # may be a singleton
 		)
 
-		ilog = create_log(
+		psl = create_log(
 			# gateway=f"{self.doctype}[{self.name}]",
 			tx_data=tx_data,
 			status="Initiated",
 		)
-		return ilog.name
+		return psl.name
 
 	@staticmethod
-	def get_payment_url(ilog_name: ILogName) -> PaymentUrl | None:
+	def get_payment_url(psl_name: PSLName) -> PaymentUrl | None:
 		"""Use the payment url to initiate the user flow, for example via email or chat message.
 
 		Beware, that the controller might not implement this and in that case return: None
 		"""
-		query_param = urlencode({TX_REFERENCE_KEY: ilog_name})
+		query_param = urlencode({TX_REFERENCE_KEY: psl_name})
 		return get_url(f"./pay?{query_param}")
 
 	@staticmethod
-	def proceed(ilog_name: ILogName, updated_tx_data: TxData | None) -> Proceeded:
+	def proceed(psl_name: PSLName, updated_tx_data: TxData | None) -> Proceeded:
 		"""Call this when the user agreed to proceed with the payment to initiate the capture with
 		the remote payment gateway.
 
@@ -133,15 +133,15 @@ class PaymentController(Document):
 		```
 		"""
 
-		ilog: PaymentGatewayIntegrationLog
+		psl: PaymentSessionLog
 		self: "PaymentController"
-		ilog, self = recover_references(ilog_name)
+		psl, self = recover_references(psl_name)
 
-		ilog.update_tx_data(updated_tx_data or {}, "Queued")  # commits
+		psl.update_tx_data(updated_tx_data or {}, "Queued")  # commits
 
 		# tx_data = self._patch_tx_data(tx_data)  # controller specific modifications
 
-		self.state = ilog.load_state()
+		self.state = psl.load_state()
 		self.state.mandate: PaymentMandate = self._get_mandate()
 
 		try:
@@ -149,7 +149,7 @@ class PaymentController(Document):
 			if self._should_have_mandate() and not self.mandate:
 				self.state.mandate = self._create_mandate()
 				initiated = self._initiate_mandate_acquisition()
-				ilog.db_set(
+				psl.db_set(
 					{
 						"flow_type": FlowType.mandate_acquisition,
 						"correlation_id": initiated.correlation_id,
@@ -166,7 +166,7 @@ class PaymentController(Document):
 				)
 			elif self.state.mandate:
 				initiated = self._initiate_mandated_charge()
-				ilog.db_set(
+				psl.db_set(
 					{
 						"flow_type": FlowType.mandated_charge,
 						"correlation_id": initiated.correlation_id,
@@ -183,7 +183,7 @@ class PaymentController(Document):
 				)
 			else:
 				initiated = self._initiate_charge()
-				ilog.db_set(
+				psl.db_set(
 					{
 						"flow_type": FlowType.charge,
 						"correlation_id": initiated.correlation_id,
@@ -198,7 +198,7 @@ class PaymentController(Document):
 				)
 
 		except Exception as e:
-			error = ilog.log_error(title="Initiated Failure")
+			error = psl.log_error(title="Initiated Failure")
 			frappe.redirect_to_message(
 				_("Payment Gateway Error"),
 				_(
@@ -210,7 +210,7 @@ class PaymentController(Document):
 			raise frappe.Redirect
 
 	@staticmethod
-	def process_response(ilog_name: ILogName, payload: RemoteServerProcessingPayload) -> Processed:
+	def process_response(psl_name: PSLName, payload: RemoteServerProcessingPayload) -> Processed:
 		"""Call this from the controlling business logic; either backend or frontens.
 
 		It will recover the correct controller and dispatch the correct processing based on data that is at this
@@ -221,22 +221,22 @@ class PaymentController(Document):
 		    to processing by controller._validate_response_payload
 		"""
 
-		ilog: PaymentGatewayIntegrationLog
+		psl: PaymentSessionLog
 		self: "PaymentController"
-		ilog, self = recover_references(ilog_name)
+		psl, self = recover_references(psl_name)
 
-		self.state = ilog.load_state()
+		self.state = psl.load_state()
 		self.state.response_payload = MappingProxyType(payload)
 		# guard against already processed or currently being processed payloads via another entrypoint
 		try:
-			ilog.lock(timeout=3)  # max processing allowance of alternative flow
+			psl.lock(timeout=3)  # max processing allowance of alternative flow
 		except frappe.DocumentLockedError:
 			return self.state.tx_data.get("saved_return_value")
 
 		try:
 			self._validate_response_payload()
 		except Exception:
-			error = ilog.log_error("Response validation failure")
+			error = psl.log_error("Response validation failure")
 			frappe.redirect_to_message(
 				_("Server Error"),
 				_("There's been an issue with your payment."),
@@ -244,15 +244,15 @@ class PaymentController(Document):
 				indicator_color="red",
 			)
 
-		ref_doc = frappe.get_doc(ilog.reference_doctype, ilog.reference_docname)
+		ref_doc = frappe.get_doc(psl.reference_doctype, psl.reference_docname)
 
 		def _process_response(callable, hookmethod, flowtype) -> Processed:
 			processed = None
 			try:
 				processed = callable()
 			except Exception:
-				error = ilog.log_error(f"Processing failure ({flowtype})")
-				ilog.handle_failure(self.state.response_payload)
+				error = psl.log_error(f"Processing failure ({flowtype})")
+				psl.handle_failure(self.state.response_payload)
 				frappe.redirect_to_message(
 					_("Server Error"),
 					_error_value(error, flowtype),
@@ -269,7 +269,7 @@ class PaymentController(Document):
 					if res := ref_doc.run_method(hookmethod, MappingProxyType(self.flags), self.state):
 						processed = Processed(gateway=self.name, **res)
 			except Exception:
-				error = ilog.log_error(f"Processing failure ({flowtype} - refdoc hook)")
+				error = psl.log_error(f"Processing failure ({flowtype} - refdoc hook)")
 				frappe.redirect_to_message(
 					_("Server Error"),
 					_error_value(error, f"{flowtype} (via ref doc hook)"),
@@ -294,7 +294,7 @@ class PaymentController(Document):
 			)
 
 			if self.flags.status_changed_to in self.flowstates.success:
-				ilog.handle_success(self.state.response_payload)
+				psl.handle_success(self.state.response_payload)
 				processed = processed or Processed(
 					gateway=self.name,
 					message=_("Payment {} succeeded").format(flowtype),
@@ -302,8 +302,8 @@ class PaymentController(Document):
 					payload=None,
 				)
 			elif self.flags.status_changed_to in self.flowstates.pre_authorized:
-				ilog.handle_success(self.state.response_payload)
-				ilog.db_set("status", "Authorized", update_modified=False)
+				psl.handle_success(self.state.response_payload)
+				psl.db_set("status", "Authorized", update_modified=False)
 				processed = processed or Processed(
 					gateway=self.name,
 					message=_("Payment {} authorized").format(flowtype),
@@ -311,8 +311,8 @@ class PaymentController(Document):
 					payload=None,
 				)
 			elif self.flags.status_changed_to in self.flowstates.processing:
-				ilog.handle_success(self.state.response_payload)
-				ilog.db_set("status", "Waiting", update_modified=False)
+				psl.handle_success(self.state.response_payload)
+				psl.db_set("status", "Waiting", update_modified=False)
 				processed = processed or Processed(
 					gateway=self.name,
 					message=_("Payment {} awaiting further processing by the bank").format(flowtype),
@@ -320,14 +320,14 @@ class PaymentController(Document):
 					payload=None,
 				)
 			elif self.flags.status_changed_to in self.flowstates.failure:
-				ilog.handle_failure(self.state.response_payload)
+				psl.handle_failure(self.state.response_payload)
 				try:
 					if ref_doc.hasattr("on_payment_failed"):
 						msg = self._render_failure_message()
 						status = self.flags.status_changed_to
 						ref_doc.run_method("on_payment_failed", status, msg)
 				except Exception:
-					error = ilog.log_error("Setting failure message on ref doc failed")
+					error = psl.log_error("Setting failure message on ref doc failed")
 				processed = processed or Processed(
 					gateway=self.name,
 					message=_("Payment {} failed").format(flowtype),
@@ -337,7 +337,7 @@ class PaymentController(Document):
 
 			return processed
 
-		match ilog.flow_type:
+		match psl.flow_type:
 			case FlowType.mandate_acquisition:
 				self.state.mandate: PaymentMandate = self._get_mandate()
 				processed: Processed = _process_response(
@@ -359,7 +359,7 @@ class PaymentController(Document):
 					flowtype="charge",
 				)
 
-		ilog.update_status({"saved_return_value": processed.__dict__}, ilog.status)
+		psl.update_status({"saved_return_value": processed.__dict__}, psl.status)
 		return processed
 
 		# ---------------------------------------
@@ -375,7 +375,7 @@ class PaymentController(Document):
 		"""
 		raise NotImplementedError
 
-	def is_user_flow_initiation_delegated(self, ilog_name: ILogName) -> bool:
+	def is_user_flow_initiation_delegated(self, psl_name: PSLName) -> bool:
 		"""If true, you should initiate the user flow from the Ref Doc.
 
 		For example, by sending an email (with a payment url), letting the user make a phone call or initiating a factoring process.
@@ -403,10 +403,10 @@ class PaymentController(Document):
 		it will initiate the adquisition of a new mandate in self._create_mandate().
 
 		You have read (!) access to:
-		- self.state.ilog
+		- self.state.psl
 		- self.state.tx_data
 		"""
-		assert self.state.ilog
+		assert self.state.psl
 		assert self.state.tx_data
 		_help_me_develop(self.state)
 		return False
@@ -417,10 +417,10 @@ class PaymentController(Document):
 		Since a mandate might be highly controller specific, this is its accessor.
 
 		You have read (!) access to:
-		- self.state.ilog
+		- self.state.psl
 		- self.state.tx_data
 		"""
-		assert self.state.ilog
+		assert self.state.psl
 		assert self.state.tx_data
 		_help_me_develop(self.state)
 		return None
@@ -431,10 +431,10 @@ class PaymentController(Document):
 		Since a mandate might be highly controller specific, this is its constructor.
 
 		You have read (!) access to:
-		- self.state.ilog
+		- self.state.psl
 		- self.state.tx_data
 		"""
-		assert self.state.ilog
+		assert self.state.psl
 		assert self.state.tx_data
 		_help_me_develop(self.state)
 		return None
@@ -443,7 +443,7 @@ class PaymentController(Document):
 		"""Invoked by proceed to initiate a mandate acquisiton flow.
 
 		Implementations can read:
-		- self.state.ilog
+		- self.state.psl
 		- self.state.tx_data
 
 		Implementations can read/write:
@@ -456,7 +456,7 @@ class PaymentController(Document):
 		"""Invoked by proceed or after having aquired a mandate in order to initiate a mandated charge flow.
 
 		Implementations can read:
-		- self.state.ilog
+		- self.state.psl
 		- self.state.tx_data
 
 		Implementations can read/write:
@@ -469,7 +469,7 @@ class PaymentController(Document):
 		"""Invoked by proceed in order to initiate a charge flow.
 
 		Implementations can read:
-		- self.state.ilog
+		- self.state.psl
 		- self.state.tx_data
 		"""
 		_help_me_develop(self.state)
@@ -479,7 +479,7 @@ class PaymentController(Document):
 		"""Implement how the validation of the response signature
 
 		Implementations can read:
-		- self.state.ilog
+		- self.state.psl
 		- self.state.tx_data
 		- self.state.response_payload
 		"""
@@ -490,7 +490,7 @@ class PaymentController(Document):
 		"""Implement how the controller should process mandate acquisition responses
 
 		Implementations can read:
-		- self.state.ilog
+		- self.state.psl
 		- self.state.tx_data
 		- self.state.response_payload
 
@@ -504,7 +504,7 @@ class PaymentController(Document):
 		"""Implement how the controller should process mandated charge responses
 
 		Implementations can read:
-		- self.state.ilog
+		- self.state.psl
 		- self.state.tx_data
 		- self.state.response_payload
 
@@ -518,7 +518,7 @@ class PaymentController(Document):
 		"""Implement how the controller should process charge responses
 
 		Implementations can read:
-		- self.state.ilog
+		- self.state.psl
 		- self.state.tx_data
 		- self.state.response_payload
 		"""
@@ -529,7 +529,7 @@ class PaymentController(Document):
 		"""Extract a readable failure message out of the server response
 
 		Implementations can read:
-		- self.state.ilog
+		- self.state.psl
 		- self.state.tx_data
 		- self.state.response_payload
 		- self.state.mandate; if mandate is involved

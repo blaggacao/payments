@@ -100,7 +100,7 @@
  "modified": "2024-04-04 12:15:58.094727",
  "modified_by": "Administrator",
  "module": "Payments",
- "name": "Payment Gateway Integration Log",
+ "name": "Payment Session Log",
  "owner": "Administrator",
  "permissions": [
   {

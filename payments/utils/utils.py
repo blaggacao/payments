@@ -7,18 +7,18 @@ from frappe import _
 from contextlib import contextmanager
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 
-from payments.types import ILogName
+from payments.types import PSLName
 
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
 	from payments.controllers import PaymentController
-	from payments.payments.doctype.payment_gateway_integration_log.payment_gateway_integration_log import (
-		PaymentGatewayIntegrationLog,
+	from payments.payments.doctype.payment_session_log.payment_session_log import (
+		PaymentSessionLog,
 	)
 
 # Key used to identify the integration request on the frappe/erpnext side across its lifecycle
-TX_REFERENCE_KEY = "ref"
+TX_REFERENCE_KEY = "psl"
 
 
 def get_payment_controller(payment_gateway: str) -> "PaymentController":
@@ -37,15 +37,13 @@ def get_payment_controller(payment_gateway: str) -> "PaymentController":
 
 
 def recover_references(
-	ilog_name: ILogName,
-) -> ("PaymentGatewayIntegrationLog", "PaymentController"):
-	ilog: PaymentGatewayIntegrationLog = frappe.get_cached_doc(
-		"Payment Gateway Integration Log", ilog_name
-	)
+	psl_name: PSLName,
+) -> ("PaymentSessionLog", "PaymentController"):
+	psl: PaymentSessionLog = frappe.get_cached_doc("Payment Session Log", psl_name)
 	pattern = r"^(.+)\[(.+)\]$"
-	doctype, docname = re.fullmatch(pattern, ilog.gateway).groups()
+	doctype, docname = re.fullmatch(pattern, psl.gateway).groups()
 	controller: PaymentController = frappe.get_cached_doc(doctype, docname)
-	return ilog, controller
+	return psl, controller
 
 
 @frappe.whitelist(allow_guest=True, xss_safe=True)

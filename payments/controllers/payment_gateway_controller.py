@@ -5,10 +5,12 @@ from urllib.parse import urlencode
 import frappe
 from frappe import _
 from frappe.model.document import Document
-from frappe.integrations.utils import create_request_log
+from payments.payments.doctype.payment_gateway_integration_log.payment_gateway_integration_log import (
+	create_log,
+)
 from frappe.utils import get_url
 
-from payments.utils import TX_REFERENCE_KEY
+from payments.utils import TX_REFERENCE_KEY, recover_references
 
 from types import MappingProxyType
 
@@ -23,6 +25,7 @@ from payments.types import (
 	Proceeded,
 	RemoteServerInitiationPayload,
 	RemoteServerProcessingPayload,
+	FlowStates,
 )
 
 from typing import TYPE_CHECKING, Optional
@@ -50,9 +53,20 @@ def _help_me_develop(state):
 class PaymentGatewayController(Document):
 	"""This controller implemets the public API of payment gateway controllers."""
 
+	def __new__(cls, *args, **kwargs):
+		assert cls.flowstates and isinstance(
+			cls.flowstates, FlowStates
+		), """the controller must declare its flow states in `cls.flowstates`
+		and it must be an instance of payments.types.FlowStates
+		"""
+		return super().__new__(cls, *args, **kwargs)
+
 	def __init__(self, *args, **kwargs):
 		super(Document, self).__init__(*args, **kwargs)
 		self.state = frappe._dict()
+
+	def load_ilog(ilog_name: ILogName) -> None:
+		pass
 
 	@staticmethod
 	def initiate(
@@ -60,7 +74,7 @@ class PaymentGatewayController(Document):
 	) -> ILogName:
 		"""Initiate a payment flow from Ref Doc with the given gateway.
 
-		Inheriting methods can invoke super and then set e.g. request_id on self.state.ilog to save
+		Inheriting methods can invoke super and then set e.g. correlation_id on self.state.ilog to save
 		and early-obtained correlation id from the payment gateway or to initiate the user flow if delegated to
 		the controller (see: is_user_flow_initiation_delegated)
 		"""
@@ -78,14 +92,12 @@ class PaymentGatewayController(Document):
 			gateway.gateway_controller or gateway.gateway_settings,  # may be a singleton
 		)
 
-		tx_data = self._patch_tx_data(tx_data)  # controller specific modifications
-
-		# service_name is used here as short-cut to recover the controller from the tx reference (i.e. interation request name) from
-		# the front end without the need for going over the reference document which may be hinreder by permissions or add latency
-		self.state.ilog = create_request_log(
-			tx_data, service_name=f"{self.doctype}[{self.name}]", name=name
+		ilog = create_log(
+			# gateway=f"{self.doctype}[{self.name}]",
+			tx_data=tx_data,
+			status="Initiated",
 		)
-		return self.state.ilog.name
+		return ilog.name
 
 	@staticmethod
 	def get_payment_url(ilog_name: ILogName) -> PaymentUrl | None:
@@ -120,13 +132,16 @@ class PaymentGatewayController(Document):
 		        pass
 		```
 		"""
-		ilog: PaymentGatewayIntegrationLog = frappe.get_doc("Payment Gateway Integration Log", ilog_name)
-		ilog.update_status(updated_tx_data or {}, "Queued")
 
-		self = frappe.get_doc(ilog.url)
+		ilog: PaymentGatewayIntegrationLog
+		self: "PaymentGatewayController"
+		ilog, self = recover_references(ilog_name)
 
-		self.state.ilog = MappingProxyType(ilog.as_dict())
-		self.state.tx_data = MappingProxyType(json.loads(ilog.data))
+		ilog.update_tx_data(updated_tx_data or {}, "Queued")  # commits
+
+		# tx_data = self._patch_tx_data(tx_data)  # controller specific modifications
+
+		self.state = ilog.load_state()
 		self.state.mandate: PaymentMandate = self._get_mandate()
 
 		try:
@@ -134,35 +149,50 @@ class PaymentGatewayController(Document):
 			if self._should_have_mandate() and not self.mandate:
 				self.state.mandate = self._create_mandate()
 				initiated = self._initiate_mandate_acquisition()
-				ilog.db_set("flow_type", FlowType.mandate_acquisition)
-				ilog.db_set("request_id", initiated.correlation_id, commit=True)
-				ilog.update_status({"saved_mandate": self.state.mandate.name}, ilog.status)
+				ilog.db_set(
+					{
+						"flow_type": FlowType.mandate_acquisition,
+						"correlation_id": initiated.correlation_id,
+						"mandate": f"{self.state.mandate.doctype}[{self.state.mandate.name}]",
+					},
+					commit=True,
+				)
 				return Proceeded(
-					gateway=self.name,
-					type=FlowType.mandate_acquisition,
+					integration=self.doctype,
+					flowtype=FlowType.mandate_acquisition,
 					mandate=self.state.mandate,
 					txdata=self.state.tx_data,
 					payload=initiated.payload,
 				)
 			elif self.state.mandate:
 				initiated = self._initiate_mandated_charge()
-				ilog.db_set("flow_type", FlowType.mandated_charge)
-				ilog.db_set("request_id", initiated.correlation_id, commit=True)
-				ilog.update_status({"saved_mandate": self.state.mandate.name}, ilog.status)
+				ilog.db_set(
+					{
+						"flow_type": FlowType.mandated_charge,
+						"correlation_id": initiated.correlation_id,
+						"mandate": f"{self.state.mandate.doctype}[{self.state.mandate.name}]",
+					},
+					commit=True,
+				)
 				return Proceeded(
-					gateway=self.name,
-					type=FlowType.mandated_charge,
+					integration=self.doctype,
+					flowtype=FlowType.mandated_charge,
 					mandate=self.state.mandate,
 					txdata=self.state.tx_data,
 					payload=initiated.payload,
 				)
 			else:
 				initiated = self._initiate_charge()
-				ilog.db_set("flow_type", FlowType.charge)
-				ilog.db_set("request_id", initiated.correlation_id, commit=True)
+				ilog.db_set(
+					{
+						"flow_type": FlowType.charge,
+						"correlation_id": initiated.correlation_id,
+					},
+					commit=True,
+				)
 				return Proceeded(
-					gateway=self.name,
-					type=FlowType.charge,
+					integration=self.doctype,
+					flowtype=FlowType.charge,
 					txdata=self.state.tx_data,
 					payload=initiated.payload,
 				)
@@ -177,6 +207,7 @@ class PaymentGatewayController(Document):
 				http_status_code=401,
 				indicator_color="yellow",
 			)
+			raise frappe.Redirect
 
 	@staticmethod
 	def process_response(ilog_name: ILogName, payload: RemoteServerProcessingPayload) -> Processed:
@@ -190,17 +221,11 @@ class PaymentGatewayController(Document):
 		    to processing by controller._validate_response_payload
 		"""
 
-		ilog: PaymentGatewayIntegrationLog = frappe.get_cached_doc(
-			"Payment Gateway Integration Log", ilog_name
-		)
-		self: "PaymentGatewayController" = frappe.get_cached_doc(ilog.url)
+		ilog: PaymentGatewayIntegrationLog
+		self: "PaymentGatewayController"
+		ilog, self = recover_references(ilog_name)
 
-		assert (
-			self.success_states
-		), "the controller must declare its `.success_states` as an iterable on the class"
-
-		self.state.ilog = MappingProxyType(ilog.as_dict())
-		self.state.tx_data = MappingProxyType(json.loads(ilog.data))  # QoL
+		self.state = ilog.load_state()
 		self.state.response_payload = MappingProxyType(payload)
 		# guard against already processed or currently being processed payloads via another entrypoint
 		try:
@@ -252,7 +277,23 @@ class PaymentGatewayController(Document):
 					indicator_color="red",
 				)
 
-			if self.flags.status_changed_to in self.success_states:
+			_state_list = (
+				self.flowstates.success
+				+ self.flowstates.pre_authorized
+				+ self.flowstates.processing
+				+ self.flowstates.failure
+			)
+
+			assert (
+				self.flags.status_changed_to in _state_list
+			), """
+			self.flags.status_changed_to must be in the set of possible states for this controller:
+			 - {}
+			""".format(
+				"\n - ".join(_state_list)
+			)
+
+			if self.flags.status_changed_to in self.flowstates.success:
 				ilog.handle_success(self.state.response_payload)
 				processed = processed or Processed(
 					gateway=self.name,
@@ -260,7 +301,7 @@ class PaymentGatewayController(Document):
 					action={"redirect_to": "/"},
 					payload=None,
 				)
-			elif self.pre_authorized_states and self.flags.status_changed_to in self.pre_authorized_states:
+			elif self.flags.status_changed_to in self.flowstates.pre_authorized:
 				ilog.handle_success(self.state.response_payload)
 				ilog.db_set("status", "Authorized", update_modified=False)
 				processed = processed or Processed(
@@ -269,7 +310,7 @@ class PaymentGatewayController(Document):
 					action={"redirect_to": "/"},
 					payload=None,
 				)
-			elif self.waiting_states and self.flags.status_changed_to in self.waiting_states:
+			elif self.flags.status_changed_to in self.flowstates.processing:
 				ilog.handle_success(self.state.response_payload)
 				ilog.db_set("status", "Waiting", update_modified=False)
 				processed = processed or Processed(
@@ -278,7 +319,7 @@ class PaymentGatewayController(Document):
 					action={"redirect_to": "/"},
 					payload=None,
 				)
-			else:
+			elif self.flags.status_changed_to in self.flowstates.failure:
 				ilog.handle_failure(self.state.response_payload)
 				try:
 					if ref_doc.hasattr("on_payment_failed"):

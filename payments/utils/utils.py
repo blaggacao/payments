@@ -7,11 +7,15 @@ from frappe import _
 from contextlib import contextmanager
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 
+from payments.types import ILogName
+
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
 	from payments.controllers.payment_gateway_controller import PaymentGatewayController
-	from frappe.integrations.doctype.integration_request.integration_request import IntegrationRequest
+	from payments.payments.doctype.payment_gateway_integration_log.payment_gateway_integration_log import (
+		PaymentGatewayIntegrationLog,
+	)
 
 # Key used to identify the integration request on the frappe/erpnext side across its lifecycle
 TX_REFERENCE_KEY = "ref"
@@ -33,34 +37,15 @@ def get_payment_gateway_controller(payment_gateway: str) -> "PaymentGatewayContr
 
 
 def recover_references(
-	integration_request_name: str,
-) -> ("IntegrationRequest", "PaymentGatewayController"):
-	integration_request: IntegrationRequest = frappe.get_doc(
-		"Integration Request", integration_request_name
+	ilog_name: ILogName,
+) -> ("PaymentGatewayIntegrationLog", "PaymentGatewayController"):
+	ilog: PaymentGatewayIntegrationLog = frappe.get_cached_doc(
+		"Payment Gateway Integration Log", ilog_name
 	)
 	pattern = r"^(.+)\[(.+)\]$"
-	doctype, docname = re.fullmatch(pattern, integration_request.integration_request_service).groups()
-	controller: PaymentGatewayController = frappe.get_doc(doctype, docname)
-	return integration_request, controller
-
-
-def build_context(context: dict, expected_keys: list[str], integration_request: str) -> None:
-	integration_request, gateway_controller = recover_references(frappe.form_dict[TX_REFERENCE_KEY])
-	payment_details = json.loads(integration_request.data)
-
-	try:
-		for key in expected_keys:
-			context[key] = payment_details[key]
-	except Exception as e:
-		frappe.redirect_to_message(
-			_("Invalid Reference"),
-			_("This checkout reference ({}) is invalid!").format(integration_request.name),
-			http_status_code=400,
-			indicator_color="red",
-		)
-
-		frappe.local.flags.redirect_location = frappe.local.response.location
-		raise frappe.Redirect
+	doctype, docname = re.fullmatch(pattern, ilog.gateway).groups()
+	controller: PaymentGatewayController = frappe.get_cached_doc(doctype, docname)
+	return ilog, controller
 
 
 @frappe.whitelist(allow_guest=True, xss_safe=True)

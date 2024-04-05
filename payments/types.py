@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 
 from frappe.model.document import Document
 
@@ -16,6 +16,14 @@ class FlowType(str, Enum):
 	charge = "charge"
 	mandated_charge = "mandated_charge"
 	mandate_acquisition = "mandate_acquisition"
+
+
+@dataclass
+class FlowStates:
+	sucess: list[str]
+	pre_authorized: list[str]
+	processing: list[str]
+	failure: list[str]
 
 
 class RemoteServerInitiationPayload(dict):
@@ -85,12 +93,13 @@ class Proceeded:
 
 	Interface: Payment Gateway Controller -> calling control flow (backend or frontend)
 
-	gateway:
-	    The name of the integration so that the control flow can case switch on it
+	integration:
+	    The name of the integration (gateway doctype).
+	    Exposed so that the controlling business flow can case switch on it.
 	"""
 
-	gateway: str
-	type: FlowType
+	integration: str
+	flowtype: FlowType
 	mandate: PaymentMandate | None  # TODO: will this be serialized when called from the frontend?
 	txdata: TxData
 	payload: RemoteServerInitiationPayload

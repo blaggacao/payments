@@ -1,0 +1,18 @@
+{% extends "templates/base.html" %}
+
+{% block title %}{{ _("Payment") }}{% endblock %}
+{% block navbar %}{% endblock %}
+
+{%- block head_include %}
+{{ gateway_css or ""}}
+{% endblock -%}
+
+{%- block content -%}
+{{ gateway_widget or ""}}
+{% endblock %}
+
+{% block base_scripts %}
+{{ gateway_js or ""}}
+{% endblock %}
+
+{% set web_include_js=[] %}

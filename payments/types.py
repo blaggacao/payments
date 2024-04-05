@@ -36,7 +36,7 @@ class Initiated:
 	Interface: Concrete Gateway Implementation -> Payment Gateway Controller
 
 	correlation_id:
-	    stored as request_id in the integration request to correlate
+	    stored as request_id in the integration log to correlate
 	    remote and local request
 	"""
 
@@ -109,21 +109,19 @@ class _Processed:
 	    a (translated) message to show to the user
 	action:
 	    an action dictionary that is understood by the fronted | TODO: type it, too
-	payload:
-	    a gateway specific payload that is understood by a gateway-specific frontend
-	    implementation
 	"""
 
 	message: str
 	action: dict
-	payload: RemoteServerProcessingPayload
 
 
 @dataclass
 class Processed:
 	"""The return data structure after processing gateway response.
 
-	Interface: Payment Gateway Controller -> calling control flow (backend or frontend)
+	Interface:
+	Payment Gateway Controller -> Calling Buisness Flow (backend or frontend)
+	Payment Gateway Controller -> Calling Buisness Flow (backend or frontend)
 
 	Implementation Note:
 	If the Ref Doc exposes a hook method, this should return Processed, if implemented
@@ -149,10 +147,12 @@ class Processed:
 # for nicer DX using an LSP
 
 
-class IntegrationRequestName(str):
-	"""The primary reference for the Ref Doc for an ongoing payment gateway flow.
+class ILogName(str):
+	"""The name of the primary local reference to identify an ongoing payment gateway flow.
 
-	Interface: Payment Gateway Controller -> Ref Doc
+	Interface: Payment Gateway Controller -> Ref Doc -> Payment Gateway Controller
+	           Payment Gateway Controller -> Remote Server -> Payment Gateway Controller
+	           Payment Gateway Controller -> Calling Buisness Flow -> Payment Gateway Controller
 
 	It is first returned by a call to initiate and should be stored on
 	the Ref Doc for later reference.
@@ -164,5 +164,5 @@ class PaymentUrl(str):
 
 	Interface: Payment Gateway Controller -> Ref Doc
 
-	It is rendered from the integration request reference and the URL of the current site.
+	It is rendered from the integration log reference and the URL of the current site.
 	"""

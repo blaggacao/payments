@@ -1,7 +1,7 @@
 from frappe.exceptions import ValidationError
 
 
-class InitiationError(Exception):
+class FailedToInitiateFlowError(Exception):
 	pass
 
 

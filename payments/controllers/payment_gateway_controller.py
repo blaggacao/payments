@@ -16,7 +16,7 @@ from payments.types import (
 	Initiated,
 	TxData,
 	Processed,
-	IntegrationRequestName,
+	ILogName,
 	PaymentUrl,
 	PaymentMandate,
 	FlowType,
@@ -28,7 +28,9 @@ from payments.types import (
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
-	from frappe.integrations.doctype.integration_request.integration_request import IntegrationRequest
+	from payments.payments.doctype.payment_gateway_integration_log.payment_gateway_integration_log import (
+		PaymentGatewayIntegrationLog,
+	)
 	from payments.payments.doctype.payment_gateway.payment_gateway import PaymentGateway
 
 
@@ -52,20 +54,13 @@ class PaymentGatewayController(Document):
 		super(Document, self).__init__(*args, **kwargs)
 		self.state = frappe._dict()
 
-	def on_refdoc_submission(self, tx_data: TxData) -> None:
-		"""Invoked by the reference document for example in order to validate the transaction data.
-
-		Should throw on error with an informative user facing message.
-		"""
-		raise NotImplementedError
-
 	@staticmethod
 	def initiate(
 		payment_gateway_name: str, tx_data: TxData, correlation_id: str | None, name: str | None
-	) -> IntegrationRequestName:
+	) -> ILogName:
 		"""Initiate a payment flow from Ref Doc with the given gateway.
 
-		Inheriting methods can invoke super and then set e.g. request_id on self.state.integration_request to save
+		Inheriting methods can invoke super and then set e.g. request_id on self.state.ilog to save
 		and early-obtained correlation id from the payment gateway or to initiate the user flow if delegated to
 		the controller (see: is_user_flow_initiation_delegated)
 		"""
@@ -83,37 +78,26 @@ class PaymentGatewayController(Document):
 			gateway.gateway_controller or gateway.gateway_settings,  # may be a singleton
 		)
 
+		tx_data = self._patch_tx_data(tx_data)  # controller specific modifications
+
 		# service_name is used here as short-cut to recover the controller from the tx reference (i.e. interation request name) from
 		# the front end without the need for going over the reference document which may be hinreder by permissions or add latency
-		self.state.integration_request = create_request_log(
+		self.state.ilog = create_request_log(
 			tx_data, service_name=f"{self.doctype}[{self.name}]", name=name
 		)
-		return self.state.integration_request.name
+		return self.state.ilog.name
 
 	@staticmethod
-	def get_payment_url(integration_request_name: IntegrationRequestName) -> PaymentUrl | None:
+	def get_payment_url(ilog_name: ILogName) -> PaymentUrl | None:
 		"""Use the payment url to initiate the user flow, for example via email or chat message.
 
 		Beware, that the controller might not implement this and in that case return: None
 		"""
-		query_param = urlencode({TX_REFERENCE_KEY: integration_request_name})
+		query_param = urlencode({TX_REFERENCE_KEY: ilog_name})
 		return get_url(f"./pay?{query_param}")
 
-	def is_user_flow_initiation_delegated(
-		self, integration_request_name: IntegrationRequestName
-	) -> bool:
-		"""If true, you should initiate the user flow from the Ref Doc.
-
-		For example, by sending an email (with a payment url), letting the user make a phone call or initiating a factoring process.
-
-		If false, the gateway initiates the user flow.
-		"""
-		return False
-
 	@staticmethod
-	def proceed(
-		integration_request_name: IntegrationRequestName, updated_tx_data: TxData | None
-	) -> Proceeded:
+	def proceed(ilog_name: ILogName, updated_tx_data: TxData | None) -> Proceeded:
 		"""Call this when the user agreed to proceed with the payment to initiate the capture with
 		the remote payment gateway.
 
@@ -136,15 +120,13 @@ class PaymentGatewayController(Document):
 		        pass
 		```
 		"""
-		integration_request: IntegrationRequest = frappe.get_doc(
-			"Integration Request", integration_request_name
-		)
-		integration_request.update_status(updated_tx_data or {}, "Queued")
+		ilog: PaymentGatewayIntegrationLog = frappe.get_doc("Payment Gateway Integration Log", ilog_name)
+		ilog.update_status(updated_tx_data or {}, "Queued")
 
-		self = frappe.get_doc(integration_request.url)
+		self = frappe.get_doc(ilog.url)
 
-		self.state.integration_request = MappingProxyType(integration_request.as_dict())
-		self.state.tx_data = MappingProxyType(json.loads(integration_request.data))
+		self.state.ilog = MappingProxyType(ilog.as_dict())
+		self.state.tx_data = MappingProxyType(json.loads(ilog.data))
 		self.state.mandate: PaymentMandate = self._get_mandate()
 
 		try:
@@ -152,11 +134,9 @@ class PaymentGatewayController(Document):
 			if self._should_have_mandate() and not self.mandate:
 				self.state.mandate = self._create_mandate()
 				initiated = self._initiate_mandate_acquisition()
-				integration_request.db_set("flow_type", FlowType.mandate_acquisition)
-				integration_request.db_set("request_id", initiated.correlation_id, commit=True)
-				integration_request.update_status(
-					{"saved_mandate": self.state.mandate.name}, integration_request.status
-				)
+				ilog.db_set("flow_type", FlowType.mandate_acquisition)
+				ilog.db_set("request_id", initiated.correlation_id, commit=True)
+				ilog.update_status({"saved_mandate": self.state.mandate.name}, ilog.status)
 				return Proceeded(
 					gateway=self.name,
 					type=FlowType.mandate_acquisition,
@@ -166,11 +146,9 @@ class PaymentGatewayController(Document):
 				)
 			elif self.state.mandate:
 				initiated = self._initiate_mandated_charge()
-				integration_request.db_set("flow_type", FlowType.mandated_charge)
-				integration_request.db_set("request_id", initiated.correlation_id, commit=True)
-				integration_request.update_status(
-					{"saved_mandate": self.state.mandate.name}, integration_request.status
-				)
+				ilog.db_set("flow_type", FlowType.mandated_charge)
+				ilog.db_set("request_id", initiated.correlation_id, commit=True)
+				ilog.update_status({"saved_mandate": self.state.mandate.name}, ilog.status)
 				return Proceeded(
 					gateway=self.name,
 					type=FlowType.mandated_charge,
@@ -180,8 +158,8 @@ class PaymentGatewayController(Document):
 				)
 			else:
 				initiated = self._initiate_charge()
-				integration_request.db_set("flow_type", FlowType.charge)
-				integration_request.db_set("request_id", initiated.correlation_id, commit=True)
+				ilog.db_set("flow_type", FlowType.charge)
+				ilog.db_set("request_id", initiated.correlation_id, commit=True)
 				return Proceeded(
 					gateway=self.name,
 					type=FlowType.charge,
@@ -190,7 +168,7 @@ class PaymentGatewayController(Document):
 				)
 
 		except Exception as e:
-			error = integration_request.log_error(title="Initiated Failure")
+			error = ilog.log_error(title="Initiated Failure")
 			frappe.redirect_to_message(
 				_("Payment Gateway Error"),
 				_(
@@ -201,41 +179,39 @@ class PaymentGatewayController(Document):
 			)
 
 	@staticmethod
-	def process_response(
-		integration_request_name: IntegrationRequestName, payload: RemoteServerProcessingPayload
-	) -> Processed:
+	def process_response(ilog_name: ILogName, payload: RemoteServerProcessingPayload) -> Processed:
 		"""Call this from the controlling business logic; either backend or frontens.
 
 		It will recover the correct controller and dispatch the correct processing based on data that is at this
-		point already stored in the integration request.
+		point already stored in the integration log
 
 		payload:
 		    this is a signed, sensitive response containing the payment status; the signature is validated prior
 		    to processing by controller._validate_response_payload
 		"""
 
-		integration_request: IntegrationRequest = frappe.get_cached_doc(
-			"Integration Request", integration_request_name
+		ilog: PaymentGatewayIntegrationLog = frappe.get_cached_doc(
+			"Payment Gateway Integration Log", ilog_name
 		)
-		self: "PaymentGatewayController" = frappe.get_cached_doc(integration_request.url)
+		self: "PaymentGatewayController" = frappe.get_cached_doc(ilog.url)
 
 		assert (
 			self.success_states
 		), "the controller must declare its `.success_states` as an iterable on the class"
 
-		self.state.integration_request = MappingProxyType(integration_request.as_dict())
-		self.state.tx_data = MappingProxyType(json.loads(integration_request.data))  # QoL
+		self.state.ilog = MappingProxyType(ilog.as_dict())
+		self.state.tx_data = MappingProxyType(json.loads(ilog.data))  # QoL
 		self.state.response_payload = MappingProxyType(payload)
 		# guard against already processed or currently being processed payloads via another entrypoint
 		try:
-			integration_request.lock(timeout=3)  # max processing allowance of alternative flow
+			ilog.lock(timeout=3)  # max processing allowance of alternative flow
 		except frappe.DocumentLockedError:
 			return self.state.tx_data.get("saved_return_value")
 
 		try:
 			self._validate_response_payload()
 		except Exception:
-			error = integration_request.log_error("Response validation failure")
+			error = ilog.log_error("Response validation failure")
 			frappe.redirect_to_message(
 				_("Server Error"),
 				_("There's been an issue with your payment."),
@@ -243,17 +219,15 @@ class PaymentGatewayController(Document):
 				indicator_color="red",
 			)
 
-		ref_doc = frappe.get_doc(
-			integration_request.reference_doctype, integration_request.reference_docname
-		)
+		ref_doc = frappe.get_doc(ilog.reference_doctype, ilog.reference_docname)
 
 		def _process_response(callable, hookmethod, flowtype) -> Processed:
 			processed = None
 			try:
 				processed = callable()
 			except Exception:
-				error = integration_request.log_error(f"Processing failure ({flowtype})")
-				integration_request.handle_failure(self.state.response_payload)
+				error = ilog.log_error(f"Processing failure ({flowtype})")
+				ilog.handle_failure(self.state.response_payload)
 				frappe.redirect_to_message(
 					_("Server Error"),
 					_error_value(error, flowtype),
@@ -270,7 +244,7 @@ class PaymentGatewayController(Document):
 					if res := ref_doc.run_method(hookmethod, MappingProxyType(self.flags), self.state):
 						processed = Processed(gateway=self.name, **res)
 			except Exception:
-				error = integration_request.log_error(f"Processing failure ({flowtype} - refdoc hook)")
+				error = ilog.log_error(f"Processing failure ({flowtype} - refdoc hook)")
 				frappe.redirect_to_message(
 					_("Server Error"),
 					_error_value(error, f"{flowtype} (via ref doc hook)"),
@@ -279,39 +253,50 @@ class PaymentGatewayController(Document):
 				)
 
 			if self.flags.status_changed_to in self.success_states:
-				integration_request.handle_success(self.state.response_payload)
+				ilog.handle_success(self.state.response_payload)
 				processed = processed or Processed(
-					message=_(f"Payment {flowtype} succeeded"),
+					gateway=self.name,
+					message=_("Payment {} succeeded").format(flowtype),
 					action={"redirect_to": "/"},
 					payload=None,
 				)
 			elif self.pre_authorized_states and self.flags.status_changed_to in self.pre_authorized_states:
-				integration_request.handle_success(self.state.response_payload)
-				integration_request.db_set("status", "Authorized", update_modified=False)
+				ilog.handle_success(self.state.response_payload)
+				ilog.db_set("status", "Authorized", update_modified=False)
 				processed = processed or Processed(
-					message=_(f"Payment {flowtype} authorized"),
+					gateway=self.name,
+					message=_("Payment {} authorized").format(flowtype),
 					action={"redirect_to": "/"},
 					payload=None,
 				)
 			elif self.waiting_states and self.flags.status_changed_to in self.waiting_states:
-				integration_request.handle_success(self.state.response_payload)
-				integration_request.db_set("status", "Waiting", update_modified=False)
+				ilog.handle_success(self.state.response_payload)
+				ilog.db_set("status", "Waiting", update_modified=False)
 				processed = processed or Processed(
-					message=_(f"Payment {flowtype} awaiting further processing by the bank"),
+					gateway=self.name,
+					message=_("Payment {} awaiting further processing by the bank").format(flowtype),
 					action={"redirect_to": "/"},
 					payload=None,
 				)
 			else:
-				integration_request.handle_success(self.state.response_payload)
+				ilog.handle_failure(self.state.response_payload)
+				try:
+					if ref_doc.hasattr("on_payment_failed"):
+						msg = self._render_failure_message()
+						status = self.flags.status_changed_to
+						ref_doc.run_method("on_payment_failed", status, msg)
+				except Exception:
+					error = ilog.log_error("Setting failure message on ref doc failed")
 				processed = processed or Processed(
-					message=_(f"Payment {flowtype} failed"),
+					gateway=self.name,
+					message=_("Payment {} failed").format(flowtype),
 					action={"redirect_to": "/"},
 					payload=None,
 				)
 
 			return processed
 
-		match integration_request.flow_type:
+		match ilog.flow_type:
 			case FlowType.mandate_acquisition:
 				self.state.mandate: PaymentMandate = self._get_mandate()
 				processed: Processed = _process_response(
@@ -333,10 +318,42 @@ class PaymentGatewayController(Document):
 					flowtype="charge",
 				)
 
-		integration_request.update_status(
-			{"saved_return_value": processed.__dict__}, integration_request.status
-		)
+		ilog.update_status({"saved_return_value": processed.__dict__}, ilog.status)
 		return processed
+
+		# ---------------------------------------
+
+	# Lifecycle hooks (contracts)
+	#  - imeplement them for your controller
+	# ---------------------------------------
+
+	def validate_tx_data(self, tx_data: TxData) -> None:
+		"""Invoked by the reference document for example in order to validate the transaction data.
+
+		Should throw on error with an informative user facing message.
+		"""
+		raise NotImplementedError
+
+	def is_user_flow_initiation_delegated(self, ilog_name: ILogName) -> bool:
+		"""If true, you should initiate the user flow from the Ref Doc.
+
+		For example, by sending an email (with a payment url), letting the user make a phone call or initiating a factoring process.
+
+		If false, the gateway initiates the user flow.
+		"""
+		return False
+
+		# ---------------------------------------
+
+	# Concrete controller methods
+	#  - imeplement them for your gateway
+	# ---------------------------------------
+
+	def _patch_tx_data(self, tx_data: TxData) -> TxData:
+		"""Optional: Implement tx_data preprocessing if required by the gateway.
+		For example in order to fix rounding or decimal accuracy.
+		"""
+		return tx_data
 
 	def _should_have_mandate(self) -> bool:
 		"""Optional: Define here, if the TxData store in self.state.tx_data should have a mandate.
@@ -345,10 +362,10 @@ class PaymentGatewayController(Document):
 		it will initiate the adquisition of a new mandate in self._create_mandate().
 
 		You have read (!) access to:
-		- self.state.integration_request
+		- self.state.ilog
 		- self.state.tx_data
 		"""
-		assert self.state.integration_request
+		assert self.state.ilog
 		assert self.state.tx_data
 		_help_me_develop(self.state)
 		return False
@@ -359,10 +376,10 @@ class PaymentGatewayController(Document):
 		Since a mandate might be highly controller specific, this is its accessor.
 
 		You have read (!) access to:
-		- self.state.integration_request
+		- self.state.ilog
 		- self.state.tx_data
 		"""
-		assert self.state.integration_request
+		assert self.state.ilog
 		assert self.state.tx_data
 		_help_me_develop(self.state)
 		return None
@@ -373,10 +390,10 @@ class PaymentGatewayController(Document):
 		Since a mandate might be highly controller specific, this is its constructor.
 
 		You have read (!) access to:
-		- self.state.integration_request
+		- self.state.ilog
 		- self.state.tx_data
 		"""
-		assert self.state.integration_request
+		assert self.state.ilog
 		assert self.state.tx_data
 		_help_me_develop(self.state)
 		return None
@@ -385,7 +402,7 @@ class PaymentGatewayController(Document):
 		"""Invoked by proceed to initiate a mandate acquisiton flow.
 
 		Implementations can read:
-		- self.state.integration_request
+		- self.state.ilog
 		- self.state.tx_data
 
 		Implementations can read/write:
@@ -398,7 +415,7 @@ class PaymentGatewayController(Document):
 		"""Invoked by proceed or after having aquired a mandate in order to initiate a mandated charge flow.
 
 		Implementations can read:
-		- self.state.integration_request
+		- self.state.ilog
 		- self.state.tx_data
 
 		Implementations can read/write:
@@ -411,7 +428,7 @@ class PaymentGatewayController(Document):
 		"""Invoked by proceed in order to initiate a charge flow.
 
 		Implementations can read:
-		- self.state.integration_request
+		- self.state.ilog
 		- self.state.tx_data
 		"""
 		_help_me_develop(self.state)
@@ -421,20 +438,18 @@ class PaymentGatewayController(Document):
 		"""Implement how the validation of the response signature
 
 		Implementations can read:
-		- self.state.integration_request
+		- self.state.ilog
 		- self.state.tx_data
 		- self.state.response_payload
 		"""
 		_help_me_develop(self.state)
 		raise NotImplementedError
 
-	def _process_response_for_mandate_acquisition(
-		self, payload: RemoteServerProcessingPayload
-	) -> Processed | None:
+	def _process_response_for_mandate_acquisition(self) -> Processed | None:
 		"""Implement how the controller should process mandate acquisition responses
 
 		Implementations can read:
-		- self.state.integration_request
+		- self.state.ilog
 		- self.state.tx_data
 		- self.state.response_payload
 
@@ -444,13 +459,11 @@ class PaymentGatewayController(Document):
 		_help_me_develop(self.state)
 		raise NotImplementedError
 
-	def _process_response_for_mandated_charge(
-		self, payload: RemoteServerProcessingPayload
-	) -> Processed | None:
+	def _process_response_for_mandated_charge(self) -> Processed | None:
 		"""Implement how the controller should process mandated charge responses
 
 		Implementations can read:
-		- self.state.integration_request
+		- self.state.ilog
 		- self.state.tx_data
 		- self.state.response_payload
 
@@ -460,15 +473,25 @@ class PaymentGatewayController(Document):
 		_help_me_develop(self.state)
 		raise NotImplementedError
 
-	def _process_response_for_charge(
-		self, payload: RemoteServerProcessingPayload
-	) -> Processed | None:
+	def _process_response_for_charge(self) -> Processed | None:
 		"""Implement how the controller should process charge responses
 
 		Implementations can read:
-		- self.state.integration_request
+		- self.state.ilog
 		- self.state.tx_data
 		- self.state.response_payload
+		"""
+		_help_me_develop(self.state)
+		raise NotImplementedError
+
+	def _render_failure_message(self) -> str:
+		"""Extract a readable failure message out of the server response
+
+		Implementations can read:
+		- self.state.ilog
+		- self.state.tx_data
+		- self.state.response_payload
+		- self.state.mandate; if mandate is involved
 		"""
 		_help_me_develop(self.state)
 		raise NotImplementedError

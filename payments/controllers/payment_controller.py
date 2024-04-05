@@ -21,11 +21,11 @@ from payments.types import (
 	PSLName,
 	PaymentUrl,
 	PaymentMandate,
-	FlowType,
+	PSLType,
 	Proceeded,
 	RemoteServerInitiationPayload,
 	RemoteServerProcessingPayload,
-	FlowStates,
+	PSLStates,
 )
 
 from typing import TYPE_CHECKING, Optional
@@ -55,7 +55,7 @@ class PaymentController(Document):
 
 	def __new__(cls, *args, **kwargs):
 		assert cls.flowstates and isinstance(
-			cls.flowstates, FlowStates
+			cls.flowstates, PSLStates
 		), """the controller must declare its flow states in `cls.flowstates`
 		and it must be an instance of payments.types.FlowStates
 		"""
@@ -151,7 +151,7 @@ class PaymentController(Document):
 				initiated = self._initiate_mandate_acquisition()
 				psl.db_set(
 					{
-						"flow_type": FlowType.mandate_acquisition,
+						"flow_type": PSLType.mandate_acquisition,
 						"correlation_id": initiated.correlation_id,
 						"mandate": f"{self.state.mandate.doctype}[{self.state.mandate.name}]",
 					},
@@ -159,7 +159,7 @@ class PaymentController(Document):
 				)
 				return Proceeded(
 					integration=self.doctype,
-					flowtype=FlowType.mandate_acquisition,
+					psltype=PSLType.mandate_acquisition,
 					mandate=self.state.mandate,
 					txdata=self.state.tx_data,
 					payload=initiated.payload,
@@ -168,7 +168,7 @@ class PaymentController(Document):
 				initiated = self._initiate_mandated_charge()
 				psl.db_set(
 					{
-						"flow_type": FlowType.mandated_charge,
+						"flow_type": PSLType.mandated_charge,
 						"correlation_id": initiated.correlation_id,
 						"mandate": f"{self.state.mandate.doctype}[{self.state.mandate.name}]",
 					},
@@ -176,7 +176,7 @@ class PaymentController(Document):
 				)
 				return Proceeded(
 					integration=self.doctype,
-					flowtype=FlowType.mandated_charge,
+					psltype=PSLType.mandated_charge,
 					mandate=self.state.mandate,
 					txdata=self.state.tx_data,
 					payload=initiated.payload,
@@ -185,14 +185,14 @@ class PaymentController(Document):
 				initiated = self._initiate_charge()
 				psl.db_set(
 					{
-						"flow_type": FlowType.charge,
+						"flow_type": PSLType.charge,
 						"correlation_id": initiated.correlation_id,
 					},
 					commit=True,
 				)
 				return Proceeded(
 					integration=self.doctype,
-					flowtype=FlowType.charge,
+					psltype=PSLType.charge,
 					txdata=self.state.tx_data,
 					payload=initiated.payload,
 				)
@@ -246,33 +246,33 @@ class PaymentController(Document):
 
 		ref_doc = frappe.get_doc(psl.reference_doctype, psl.reference_docname)
 
-		def _process_response(callable, hookmethod, flowtype) -> Processed:
+		def _process_response(callable, hookmethod, psltype) -> Processed:
 			processed = None
 			try:
 				processed = callable()
 			except Exception:
-				error = psl.log_error(f"Processing failure ({flowtype})")
+				error = psl.log_error(f"Processing failure ({psltype})")
 				psl.handle_failure(self.state.response_payload)
 				frappe.redirect_to_message(
 					_("Server Error"),
-					_error_value(error, flowtype),
+					_error_value(error, psltype),
 					http_status_code=500,
 					indicator_color="red",
 				)
 
 			assert (
 				self.flags.status_changed_to
-			), f"_process_response_for_{flowtype} must set self.flags.status_changed_to"
+			), f"_process_response_for_{psltype} must set self.flags.status_changed_to"
 
 			try:
 				if ref_doc.hasattr(hookmethod):
 					if res := ref_doc.run_method(hookmethod, MappingProxyType(self.flags), self.state):
 						processed = Processed(gateway=self.name, **res)
 			except Exception:
-				error = psl.log_error(f"Processing failure ({flowtype} - refdoc hook)")
+				error = psl.log_error(f"Processing failure ({psltype} - refdoc hook)")
 				frappe.redirect_to_message(
 					_("Server Error"),
-					_error_value(error, f"{flowtype} (via ref doc hook)"),
+					_error_value(error, f"{psltype} (via ref doc hook)"),
 					http_status_code=500,
 					indicator_color="red",
 				)
@@ -297,7 +297,7 @@ class PaymentController(Document):
 				psl.handle_success(self.state.response_payload)
 				processed = processed or Processed(
 					gateway=self.name,
-					message=_("Payment {} succeeded").format(flowtype),
+					message=_("Payment {} succeeded").format(psltype),
 					action={"redirect_to": "/"},
 					payload=None,
 				)
@@ -306,7 +306,7 @@ class PaymentController(Document):
 				psl.db_set("status", "Authorized", update_modified=False)
 				processed = processed or Processed(
 					gateway=self.name,
-					message=_("Payment {} authorized").format(flowtype),
+					message=_("Payment {} authorized").format(psltype),
 					action={"redirect_to": "/"},
 					payload=None,
 				)
@@ -315,7 +315,7 @@ class PaymentController(Document):
 				psl.db_set("status", "Waiting", update_modified=False)
 				processed = processed or Processed(
 					gateway=self.name,
-					message=_("Payment {} awaiting further processing by the bank").format(flowtype),
+					message=_("Payment {} awaiting further processing by the bank").format(psltype),
 					action={"redirect_to": "/"},
 					payload=None,
 				)
@@ -330,7 +330,7 @@ class PaymentController(Document):
 					error = psl.log_error("Setting failure message on ref doc failed")
 				processed = processed or Processed(
 					gateway=self.name,
-					message=_("Payment {} failed").format(flowtype),
+					message=_("Payment {} failed").format(psltype),
 					action={"redirect_to": "/"},
 					payload=None,
 				)
@@ -338,25 +338,25 @@ class PaymentController(Document):
 			return processed
 
 		match psl.flow_type:
-			case FlowType.mandate_acquisition:
+			case PSLType.mandate_acquisition:
 				self.state.mandate: PaymentMandate = self._get_mandate()
 				processed: Processed = _process_response(
 					callable=self._process_response_for_mandate_acquisition,
 					hookmethod="on_payment_mandate_acquisition_processed",
-					flowtype="mandate adquisition",
+					psltype="mandate adquisition",
 				)
-			case FlowType.mandated_charge:
+			case PSLType.mandated_charge:
 				self.state.mandate: PaymentMandate = self._get_mandate()
 				processed: Processed = _process_response(
 					callable=self._process_response_for_mandated_charge,
 					hookmethod="on_payment_mandated_charge_processed",
-					flowtype="mandated charge",
+					psltype="mandated charge",
 				)
-			case FlowType.charge:
+			case PSLType.charge:
 				processed: Processed = _process_response(
 					callable=self._process_response_for_charge,
 					hookmethod="on_payment_charge_processed",
-					flowtype="charge",
+					psltype="charge",
 				)
 
 		psl.update_status({"saved_return_value": processed.__dict__}, psl.status)

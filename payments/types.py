@@ -6,7 +6,7 @@ from frappe.model.document import Document
 from enum import Enum
 
 
-class FlowType(str, Enum):
+class PSLType(str, Enum):
 	"""We distinguish three distinct flow types.
 
 	They may be chained into a composed flow from the business logic, for example a
@@ -19,7 +19,7 @@ class FlowType(str, Enum):
 
 
 @dataclass
-class FlowStates:
+class PSLStates:
 	sucess: list[str]
 	pre_authorized: list[str]
 	processing: list[str]
@@ -99,7 +99,7 @@ class Proceeded:
 	"""
 
 	integration: str
-	flowtype: FlowType
+	psltype: PSLType
 	mandate: PaymentMandate | None  # TODO: will this be serialized when called from the frontend?
 	txdata: TxData
 	payload: RemoteServerInitiationPayload

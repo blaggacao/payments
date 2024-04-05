@@ -50,7 +50,7 @@ def _help_me_develop(state):
 	pprint(state)
 
 
-class PaymentGatewayController(Document):
+class PaymentController(Document):
 	"""This controller implemets the public API of payment gateway controllers."""
 
 	def __new__(cls, *args, **kwargs):
@@ -134,7 +134,7 @@ class PaymentGatewayController(Document):
 		"""
 
 		ilog: PaymentGatewayIntegrationLog
-		self: "PaymentGatewayController"
+		self: "PaymentController"
 		ilog, self = recover_references(ilog_name)
 
 		ilog.update_tx_data(updated_tx_data or {}, "Queued")  # commits
@@ -222,7 +222,7 @@ class PaymentGatewayController(Document):
 		"""
 
 		ilog: PaymentGatewayIntegrationLog
-		self: "PaymentGatewayController"
+		self: "PaymentController"
 		ilog, self = recover_references(ilog_name)
 
 		self.state = ilog.load_state()

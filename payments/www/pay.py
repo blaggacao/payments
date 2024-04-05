@@ -3,7 +3,7 @@ import json
 import frappe
 from frappe import _
 from payments.utils import TX_REFERENCE_KEY, recover_references
-from payments.controllers.payment_gateway_controller import PaymentGatewayController
+from payments.controllers import PaymentController
 from payments.types import Proceeded
 
 no_cache = 1
@@ -28,7 +28,7 @@ def get_context(context):
 
 	ilog_name = get_ilog()
 
-	# proceeded: Proceeded = PaymentGatewayController.proceed(ilog_name, tx_update)
+	# proceeded: Proceeded = PaymentController.proceed(ilog_name, tx_update)
 
 	context.gateway_css = """
         <link rel="stylesheet" href="{{ static_assets_url }}/js/krypton-client/V4.0/ext/neon-reset.min.css">

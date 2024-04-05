@@ -6,7 +6,7 @@ $(document).ready(function() {
 		 */
 		// return false;
 		frappe.call({
-			method:"payments.controllers.payment_gateway_controller.PaymentGatewayController.process_response",
+			method:"payments.controllers.PaymentController.process_response",
 			freeze:true,
 			headers: {"X-Requested-With": "XMLHttpRequest"},
 			args: {

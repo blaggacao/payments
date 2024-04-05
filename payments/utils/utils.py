@@ -12,7 +12,7 @@ from payments.types import ILogName
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-	from payments.controllers.payment_gateway_controller import PaymentGatewayController
+	from payments.controllers import PaymentController
 	from payments.payments.doctype.payment_gateway_integration_log.payment_gateway_integration_log import (
 		PaymentGatewayIntegrationLog,
 	)
@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 TX_REFERENCE_KEY = "ref"
 
 
-def get_payment_gateway_controller(payment_gateway: str) -> "PaymentGatewayController":
+def get_payment_controller(payment_gateway: str) -> "PaymentController":
 	"""Return payment gateway controller"""
 	gateway = frappe.get_doc("Payment Gateway", payment_gateway)
 	if gateway.gateway_controller is None:
@@ -38,13 +38,13 @@ def get_payment_gateway_controller(payment_gateway: str) -> "PaymentGatewayContr
 
 def recover_references(
 	ilog_name: ILogName,
-) -> ("PaymentGatewayIntegrationLog", "PaymentGatewayController"):
+) -> ("PaymentGatewayIntegrationLog", "PaymentController"):
 	ilog: PaymentGatewayIntegrationLog = frappe.get_cached_doc(
 		"Payment Gateway Integration Log", ilog_name
 	)
 	pattern = r"^(.+)\[(.+)\]$"
 	doctype, docname = re.fullmatch(pattern, ilog.gateway).groups()
-	controller: PaymentGatewayController = frappe.get_cached_doc(doctype, docname)
+	controller: PaymentController = frappe.get_cached_doc(doctype, docname)
 	return ilog, controller
 
 
@@ -52,7 +52,7 @@ def recover_references(
 def get_checkout_url(**kwargs):
 	try:
 		if kwargs.get("payment_gateway"):
-			doc = frappe.get_doc("{} Settings".format(kwargs.get("payment_gateway")))
+			doc = get_payment_controller(kwargs.get("payment_gateway"))
 			return doc.get_payment_url(**kwargs)
 		else:
 			raise Exception

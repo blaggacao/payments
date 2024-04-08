@@ -1,7 +1,5 @@
 import click
 import frappe
-import re
-import json
 
 from frappe import _
 from contextlib import contextmanager
@@ -18,7 +16,7 @@ if TYPE_CHECKING:
 	)
 
 # Key used to identify the integration request on the frappe/erpnext side across its lifecycle
-TX_REFERENCE_KEY = "psl"
+PAYMENT_SESSION_REF_KEY = "s"
 
 
 def get_payment_controller(payment_gateway: str) -> "PaymentController":
@@ -34,16 +32,6 @@ def get_payment_controller(payment_gateway: str) -> "PaymentController":
 			return frappe.get_doc(gateway.gateway_settings, gateway.gateway_controller)
 		except Exception:
 			frappe.throw(_("{0} Settings not found").format(payment_gateway))
-
-
-def recover_references(
-	psl_name: PSLName,
-) -> ("PaymentSessionLog", "PaymentController"):
-	psl: PaymentSessionLog = frappe.get_cached_doc("Payment Session Log", psl_name)
-	pattern = r"^(.+)\[(.+)\]$"
-	doctype, docname = re.fullmatch(pattern, psl.gateway).groups()
-	controller: PaymentController = frappe.get_cached_doc(doctype, docname)
-	return psl, controller
 
 
 @frappe.whitelist(allow_guest=True, xss_safe=True)

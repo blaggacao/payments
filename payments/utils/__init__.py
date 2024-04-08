@@ -5,6 +5,5 @@ from payments.utils.utils import (
 	get_payment_controller,
 	make_custom_fields,
 	erpnext_app_import_guard,
-	TX_REFERENCE_KEY,
-	recover_references,
+	PAYMENT_SESSION_REF_KEY,
 )

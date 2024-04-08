@@ -2,6 +2,7 @@
 # For license information, please see LICENSE
 
 import json
+import re
 
 import frappe
 from frappe import _
@@ -11,9 +12,13 @@ from frappe.query_builder.functions import Now
 from frappe.utils import strip_html
 from frappe.utils.data import cstr
 
-from payments.types import TxData
-
 from types import MappingProxyType
+
+from payments.types import TxData
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+	from payments.controllers import PaymentController
 
 
 class PaymentSessionLog(Document):
@@ -66,6 +71,15 @@ class PaymentSessionLog(Document):
 			psl=MappingProxyType(self.as_dict()),
 			tx_data=MappingProxyType(json.loads(self.tx_data)),
 		)
+
+	def get_controller(self) -> "PaymentController":
+		"""For perfomance reasons, this is not implemented as a dynamic link but a string value
+		so that it is only fetched when absolutely necessary.
+
+		"""
+		pattern = r"^(.+)\[(.+)\]$"
+		doctype, docname = re.fullmatch(pattern, self.gateway).groups()
+		return frappe.get_cached_doc(doctype, docname)
 
 	@staticmethod
 	def clear_old_logs(days=90):

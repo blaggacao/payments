@@ -10,7 +10,7 @@ from payments.payments.doctype.payment_session_log.payment_session_log import (
 )
 from frappe.utils import get_url
 
-from payments.utils import TX_REFERENCE_KEY, recover_references
+from payments.utils import PAYMENT_SESSION_REF_KEY
 
 from types import MappingProxyType
 
@@ -105,8 +105,10 @@ class PaymentController(Document):
 
 		Beware, that the controller might not implement this and in that case return: None
 		"""
-		query_param = urlencode({TX_REFERENCE_KEY: psl_name})
-		return get_url(f"./pay?{query_param}")
+		params = {
+			PAYMENT_SESSION_REF_KEY: psl_name,
+		}
+		return get_url(f"./pay?{urlencode(params)}")
 
 	@staticmethod
 	def proceed(psl_name: PSLName, updated_tx_data: TxData | None) -> Proceeded:
@@ -133,9 +135,8 @@ class PaymentController(Document):
 		```
 		"""
 
-		psl: PaymentSessionLog
-		self: "PaymentController"
-		psl, self = recover_references(psl_name)
+		psl: PaymentSessionLog = frappe.get_cached_doc("Payment Session Log", psl_name)
+		self: "PaymentController" = psl.get_controller()
 
 		psl.update_tx_data(updated_tx_data or {}, "Queued")  # commits
 
@@ -221,9 +222,8 @@ class PaymentController(Document):
 		    to processing by controller._validate_response_payload
 		"""
 
-		psl: PaymentSessionLog
-		self: "PaymentController"
-		psl, self = recover_references(psl_name)
+		psl: PaymentSessionLog = frappe.get_cached_doc("Payment Session Log", psl_name)
+		self: "PaymentController" = psl.get_controller()
 
 		self.state = psl.load_state()
 		self.state.response_payload = MappingProxyType(payload)

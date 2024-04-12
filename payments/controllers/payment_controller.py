@@ -115,7 +115,7 @@ class PaymentController(Document):
 		"""Call this when the user agreed to proceed with the payment to initiate the capture with
 		the remote payment gateway.
 
-		If the capture is initialized by the gatway, call this immediatly with out waiting for the
+		If the capture is initialized by the gatway, call this immediatly without waiting for the
 		user OK signal.
 
 		updated_tx_data:

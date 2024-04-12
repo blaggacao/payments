@@ -54,6 +54,22 @@ def get_context(context):
 		payer_address={},
 	).__dict__
 
+	# context.payment_buttons = {(
+	# 	entry.get("payment_button_icon") or default_icon,
+	# 	# asseable the data-gateway reference; same as used in psl.gateway
+	# 	entry.get("gateway_settings") + "[" + entry.get("gateway_controller") + "]",
+	# 	entry.get("payment_button_label")
+	# ) for entry in frappe.get_list(
+	#     "Payment Gateway",
+	#      fields=[
+	#     	"payment_button_icon",
+	#     	"payment_button_label",
+	#     	"gateway_settings",
+	#     	"gateway_controller",
+	# 	],
+	#     filters={"enable_payment_button": True}
+	# )}
+
 	context.payment_buttons = [
 		(default_icon, "Payzen Settings[Bancolombia]", "Bancolombia"),
 		(default_icon, "Payzen Settings[Colpatria]", "Colpatria"),
@@ -66,7 +82,15 @@ def get_context(context):
 	if False and psl.gateway:
 		context.is_gateway_selected = True
 		tx_update = {}  # TODO: implement that the user may change some values
-		proceede: Proceeded = PaymentController.proceed(psl.name, tx_update)
+		proceeded: Proceeded = PaymentController.proceed(psl.name, tx_update)
+
+		# Display
+		payload: RemoteServerInitiationPayload = proceeded.payload
+		controller: PaymentController = psl.get_controller() 
+		css, js, wrapper = controller.get_assets(paylod)
+		context.gateway_css = css
+		context.gateway_js = js
+		context.gateway_html = wrapper
 
 		context.gateway_css = """
             <link rel="stylesheet" href="{{ static_assets_url }}/js/krypton-client/V4.0/ext/neon-reset.min.css">

@@ -6,7 +6,9 @@
 
 {%- block head_include %}
 <style>	{% include "templates/styles/card_style.css" %}</style>
-{{ gateway_css or ""}}
+{% if button_selected %}
+	{{ gateway_css }}
+{% endif %}
 {% endblock -%}
 
 {%- block content -%}
@@ -17,34 +19,36 @@
 	</h5>
 	<div class="page-card-body">
 		{% block reference_body %}
-		{% set payer = tx_data.get("payer_contact") %}
-		<p class="text-center">
-			{{ _("Amount") }}:&emsp;{{ frappe.utils.fmt_money(tx_data.get("amount"), currency=tx_data.get("currency")) }}</br>
-			{{ _("Document") }}:&emsp;{{ tx_data.get("reference_doctype") }}</br>
-			{{ _("Customer") }}:&emsp;{{ payer.get("full_name") }}</br>
-		</p>
-		{% set primary_button = payment_buttons[0] %}
-		{% set secondary_buttons = payment_buttons[1:] %}
-		<div>
-			<div><a id="primary-button" href='{{ primary_action or "/" }}' data-gateway="{{ primary_button[1] }}"
-					class='btn btn-primary btn-sm btn-block'>{{ primary_button[0] }}&ensp;{{ primary_button[2] }}</a></div>
-			{% for secondary_button in secondary_buttons %}
-			<div><a href='{{ primary_action or "/" }}' data-gateway="{{ secondary_button[1] }}"
-					class='btn btn-sm btn-block'>{{ secondary_button[0] }}&ensp;{{ secondary_button[2] }}</a></div>
-			{% endfor %}
-		</div>
+			{% set payer = tx_data.get("payer_contact") %}
+			<p class="text-center">
+				{{ _("Amount") }}:&emsp;{{ frappe.utils.fmt_money(tx_data.get("amount"), currency=tx_data.get("currency")) }}</br>
+				{{ _("Document") }}:&emsp;{{ tx_data.get("reference_doctype") }}</br>
+				{{ _("Customer") }}:&emsp;{{ payer.get("full_name") }}</br>
+			</p>
 		{% endblock %}
-		{{ gateway_widget or ""}}
+		<div id="errors" class='text-danger text-center small my-3' style='display: none;'></div>
+		{% if not button_selected %}
+			{% set primary_button = payment_buttons[0] %}
+			{% set secondary_buttons = payment_buttons[1:] %}
+			<div>
+				<div><button id="primary-button" data-button="{{ primary_button[1] }}"
+						class='btn btn-primary btn-sm btn-block btn-pay'>{{ primary_button[0] }}&ensp;{{ primary_button[2] }}</button></div>
+				{% for secondary_button in secondary_buttons %}
+				<div><button  data-button="{{ secondary_button[1] }}"
+						class='btn btn-sm btn-block btn-pay'>{{ secondary_button[0] }}&ensp;{{ secondary_button[2] }}</button></div>
+				{% endfor %}
+			</div>
+		{% else %}
+			{{ gateway_widget }}
+		{% endif %}
 	</div>
 </div>
-{% set error_code="SELECT" %}
-{% if error_code %}
-<p class='text-muted text-center small' style='margin-top: -20px;'>{{ _("Status: {0}").format(error_code) }}</p>
-{% endif %}
 {% endblock %}
 
 {% block base_scripts %}
-{{ gateway_js or ""}}
+{% if button_selected %}
+	{{ gateway_js}}
+{% endif %}
 
 <script>
 	frappe.boot = {{boot}}

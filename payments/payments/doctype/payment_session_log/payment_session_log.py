@@ -43,22 +43,6 @@ class PaymentSessionLog(Document):
 		traceback: DF.Code | None
 		tx_data: DF.Code | None
 	# end: auto-generated types
-	def validate(self):
-		self._set_title()
-
-	def _set_title(self):
-		title = None
-		if self.message != "None":
-			title = self.message
-
-		if not title and self.method:
-			method = self.method.split(".")[-1]
-			title = method
-
-		if title:
-			title = strip_html(title)
-			self.title = title if len(title) < 100 else title[:100] + "..."
-
 	def update_tx_data(self, tx_data: TxData, status: str) -> None:
 		data = json.loads(self.tx_data)
 		data.update(tx_data)
@@ -77,11 +61,17 @@ class PaymentSessionLog(Document):
 		"""For perfomance reasons, this is not implemented as a dynamic link but a json value
 		so that it is only fetched when absolutely necessary.
 		"""
+		if not self.gateway:
+			self.log_error("No gateway selected yet")
+			frappe.throw(_("No gateway selected for this payment session"))
 		d = json.loads(self.gateway)
 		doctype, docname = d["gateway_settings"], d["gateway_controller"]
 		return frappe.get_cached_doc(doctype, docname)
 
 	def get_button(self) -> "PaymentButton":
+		if not self.button:
+			self.log_error("No button selected yet")
+			frappe.throw(_("No button selected for this payment session"))
 		return frappe.get_cached_doc("Payment Button", self.button)
 
 	@staticmethod
@@ -90,6 +80,38 @@ class PaymentSessionLog(Document):
 		frappe.db.delete(
 			table, filters=(table.modified < (Now() - Interval(days=days))) & (table.status == "Success")
 		)
+
+
+@frappe.whitelist(allow_guest=True)
+def select_button(pslName: str = None, buttonName: str = None) -> str:
+	try:
+		psl = frappe.get_cached_doc("Payment Session Log", pslName)
+	except Exception:
+		e = frappe.log_error("Payment Session Log not found", reference_doctype="Payment Session Log")
+		# Ensure no more details are leaked than the error log reference
+		frappe.local.message_log = [_("Server Failure!<br>{}").format(e)]
+		return
+	try:
+		btn: PaymentButton = frappe.get_cached_doc("Payment Button", buttonName)
+	except Exception:
+		e = frappe.log_error("Payment Button not found", reference_doctype="Payment Button")
+		# Ensure no more details are leaked than the error log reference
+		frappe.local.message_log = [_("Server Failure!<br>{}").format(e)]
+		return
+
+	psl.db_set(
+		{
+			"button": buttonName,
+			"gateway": json.dumps(
+				{
+					"gateway_settings": btn.gateway_settings,
+					"gateway_controller": btn.gateway_controller,
+				}
+			),
+		}
+	)
+	# once state set: reload the page to activate widget
+	return {"reload": True}
 
 
 def create_log(

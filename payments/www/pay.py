@@ -16,10 +16,12 @@ if TYPE_CHECKING:
 no_cache = 1
 
 
-def get_psl():
+def get_psl() -> "PaymentSessionLog":
 	try:
-		return frappe.form_dict[PAYMENT_SESSION_REF_KEY]
-	except KeyError:
+		name = frappe.form_dict[PAYMENT_SESSION_REF_KEY]
+		psl: PaymentSessionLog = frappe.get_doc("Payment Session Log", name)
+		return psl
+	except (KeyError, frappe.exceptions.DoesNotExistError):
 		frappe.redirect_to_message(
 			_("Invalid Payment Link"),
 			_("This payment link is invalid!"),
@@ -44,23 +46,26 @@ def get_context(context):
 
 	# always
 
-	psl: PaymentSessionLog = frappe.get_doc("Payment Session Log", get_psl())
+	psl: PaymentSessionLog = get_psl()
 
-	psl = None
+	# psl: PaymentSessionLog = frappe._dict({
+	#     "gateway": None,
+	#     "button": None,
+	# })
 
-	# state = psl.load_state()
+	state = psl.load_state()
 
-	# context.tx_data: TxData = state.tx_data
-	context.tx_data = TxData(
-		amount=12348.00,
-		currency="COP",
-		reference_doctype="Sales Order",
-		reference_docname="SAL-ORD-2024-0001",
-		payer_contact={"full_name": "Lina Avendano"},
-		payer_address={},
-	).__dict__
+	context.tx_data: TxData = state.tx_data
+	# context.tx_data = TxData(
+	# 	amount=12348.00,
+	# 	currency="COP",
+	# 	reference_doctype="Sales Order",
+	# 	reference_docname="SAL-ORD-2024-0001",
+	# 	payer_contact={"full_name": "Lina Avendano"},
+	# 	payer_address={},
+	# ).__dict__
 
-	if True or not psl.button:
+	if not psl.button:
 		context.button_selected = False
 		filters = {"enabled": True}
 
@@ -71,7 +76,7 @@ def get_context(context):
 		context.payment_buttons = [
 			(load_icon(entry.get("icon")), entry.get("name"), entry.get("label"))
 			for entry in frappe.get_list(
-				"Payment Gateway",
+				"Payment Button",
 				fields=["name", "icon", "label"],
 				filters=filters,
 			)

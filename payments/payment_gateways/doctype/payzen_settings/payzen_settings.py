@@ -19,6 +19,47 @@ from payments.utils import create_payment_gateway
 
 
 class PayzenSettings(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from frappe.types import DF
+
+		api_url: DF.ReadOnly | None
+		brand: DF.Literal[
+			"Clic&Pay By groupe Cr\u00e9dit du Nord",
+			"Cobro Inmediato",
+			"EpayNC",
+			"Lyra Collect",
+			"Mi Cuenta Web",
+			"Payty",
+			"PayZen India",
+			"PayZen LATAM",
+			"PayZen Brazil",
+			"PayZen Europe",
+			"Scellius",
+			"Sogecommerce",
+			"Systempay",
+		]
+		challenge_3ds: DF.Literal[
+			"DISABLED", "CHALLENGE_REQUESTED", "CHALLENGE_MANDATE", "NO_PREFERENCE", "AUTO"
+		]
+		gateway_css: DF.Code | None
+		gateway_js: DF.Code | None
+		gateway_name: DF.Data
+		gateway_wrapper: DF.Code | None
+		production_hmac_key: DF.Password | None
+		production_password: DF.Password | None
+		production_public_key: DF.Data | None
+		shop_id: DF.Data
+		static_assets_url: DF.ReadOnly | None
+		test_hmac_key: DF.Password | None
+		test_password: DF.Password | None
+		test_public_key: DF.Data | None
+		use_sandbox: DF.Check
+	# end: auto-generated types
 	supported_currencies = [
 		"COP",
 	]

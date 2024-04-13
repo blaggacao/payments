@@ -14,7 +14,6 @@
   "use_sandbox",
   "static_assets_url",
   "api_url",
-  "header_img",
   "section_break_2",
   "test_password",
   "test_hmac_key",
@@ -44,11 +43,6 @@
    "fieldname": "use_sandbox",
    "fieldtype": "Check",
    "label": "Use Sandbox"
-  },
-  {
-   "fieldname": "header_img",
-   "fieldtype": "Attach Image",
-   "label": "Header Image"
   },
   {
    "bold": 1,
@@ -132,7 +126,7 @@
   }
  ],
  "links": [],
- "modified": "2023-09-16 05:02:25.970610",
+ "modified": "2024-04-12 16:40:50.615981",
  "modified_by": "Administrator",
  "module": "Payment Gateways",
  "name": "Payzen Settings",

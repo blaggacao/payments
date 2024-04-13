@@ -362,8 +362,6 @@ class PaymentController(Document):
 		psl.update_status({"saved_return_value": processed.__dict__}, psl.status)
 		return processed
 
-		# ---------------------------------------
-
 	# Lifecycle hooks (contracts)
 	#  - imeplement them for your controller
 	# ---------------------------------------
@@ -383,8 +381,6 @@ class PaymentController(Document):
 		If false, the gateway initiates the user flow.
 		"""
 		return False
-
-		# ---------------------------------------
 
 	# Concrete controller methods
 	#  - imeplement them for your gateway

@@ -8,11 +8,7 @@
  "field_order": [
   "gateway",
   "gateway_settings",
-  "gateway_controller",
-  "column_break_uldi",
-  "enable_payment_button",
-  "payment_button_icon",
-  "payment_button_label"
+  "gateway_controller"
  ],
  "fields": [
   {
@@ -34,35 +30,10 @@
    "fieldtype": "Dynamic Link",
    "label": "Gateway Controller",
    "options": "gateway_settings"
-  },
-  {
-   "fieldname": "column_break_uldi",
-   "fieldtype": "Column Break"
-  },
-  {
-   "depends_on": "eval: doc.enable_payment_button",
-   "description": "The label to show on the payment button on checkout pages",
-   "fieldname": "payment_button_label",
-   "fieldtype": "Data",
-   "label": "Payment Button Label"
-  },
-  {
-   "depends_on": "eval: doc.enable_payment_button",
-   "description": "The svg icon to the left of the payment button label",
-   "fieldname": "payment_button_icon",
-   "fieldtype": "Attach Image",
-   "label": "Payment Button Icon"
-  },
-  {
-   "default": "0",
-   "fieldname": "enable_payment_button",
-   "fieldtype": "Check",
-   "label": "Enable Payment Button"
   }
  ],
- "image_field": "payment_button_icon",
  "links": [],
- "modified": "2024-04-12 14:21:44.451169",
+ "modified": "2022-07-24 21:17:03.864719",
  "modified_by": "Administrator",
  "module": "Payments",
  "name": "Payment Gateway",

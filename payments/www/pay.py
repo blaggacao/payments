@@ -2,14 +2,16 @@ import json
 
 import frappe
 from frappe import _
+from frappe.utils.file_manager import get_file_path
 from payments.utils import PAYMENT_SESSION_REF_KEY
 from payments.controllers import PaymentController
-from payments.types import Proceeded, TxData
+from payments.types import Proceeded, TxData, RemoteServerInitiationPayload
 
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
 	from payments.payments.doctype.payment_session_log.payment_session_log import PaymentSessionLog
+	from payments.payments.doctype.payment_button.payment_button import PaymentButton
 
 no_cache = 1
 
@@ -34,11 +36,15 @@ default_icon = """
 """
 
 
+def load_icon(icon_file):
+	return frappe.read_file(get_file_path(icon_file)) if icon_file else default_icon
+
+
 def get_context(context):
 
 	# always
 
-	# psl: PaymentSessionLog = frappe.get_doc("Payment Session Log", get_psl())
+	psl: PaymentSessionLog = frappe.get_doc("Payment Session Log", get_psl())
 
 	psl = None
 
@@ -54,93 +60,40 @@ def get_context(context):
 		payer_address={},
 	).__dict__
 
-	# context.payment_buttons = {(
-	# 	entry.get("payment_button_icon") or default_icon,
-	# 	# asseable the data-gateway reference; same as used in psl.gateway
-	# 	entry.get("gateway_settings") + "[" + entry.get("gateway_controller") + "]",
-	# 	entry.get("payment_button_label")
-	# ) for entry in frappe.get_list(
-	#     "Payment Gateway",
-	#      fields=[
-	#     	"payment_button_icon",
-	#     	"payment_button_label",
-	#     	"gateway_settings",
-	#     	"gateway_controller",
-	# 	],
-	#     filters={"enable_payment_button": True}
-	# )}
+	if True or not psl.button:
+		context.button_selected = False
+		filters = {"enabled": True}
 
-	context.payment_buttons = [
-		(default_icon, "Payzen Settings[Bancolombia]", "Bancolombia"),
-		(default_icon, "Payzen Settings[Colpatria]", "Colpatria"),
-		(default_icon, "Payzen Settings[CARDS]", "Tarjeta Credito"),
-		(default_icon, "Payzen Settings[PSE]", "PSE"),
-	]
+		# gateway was preselected; e.g. on the backend
+		if psl.gateway:
+			filters.update(json.loads(psl.gateway))
+
+		context.payment_buttons = [
+			(load_icon(entry.get("icon")), entry.get("name"), entry.get("label"))
+			for entry in frappe.get_list(
+				"Payment Gateway",
+				fields=["name", "icon", "label"],
+				filters=filters,
+			)
+		]
+
+		# context.payment_buttons += [
+		# 	(default_icon, "Payzen Settings[Bancolombia]", "Bancolombia"),
+		# 	(default_icon, "Payzen Settings[Colpatria]", "Colpatria"),
+		# 	(default_icon, "Payzen Settings[CARDS]", "Tarjeta Credito"),
+		# 	(default_icon, "Payzen Settings[PSE]", "PSE"),
+		# ]
 
 	# only when gateway has already been selected
-
-	if False and psl.gateway:
-		context.is_gateway_selected = True
+	else:
+		context.button_selected = True
 		tx_update = {}  # TODO: implement that the user may change some values
 		proceeded: Proceeded = PaymentController.proceed(psl.name, tx_update)
 
 		# Display
 		payload: RemoteServerInitiationPayload = proceeded.payload
-		controller: PaymentController = psl.get_controller() 
-		css, js, wrapper = controller.get_assets(paylod)
+		button: PaymentButton = psl.get_button()
+		css, js, wrapper = button.get_assets(payload)
 		context.gateway_css = css
 		context.gateway_js = js
 		context.gateway_html = wrapper
-
-		context.gateway_css = """
-            <link rel="stylesheet" href="{{ static_assets_url }}/js/krypton-client/V4.0/ext/neon-reset.min.css">
-        """
-		context.gateway_js = """
-            <script src="{{ static_assets_url }}/js/krypton-client/V4.0/stable/kr-payment-form.min.js"
-              kr-public-key="{{ kr_public_key }}"></script>
-            <script src="{{ static_assets_url }}/js/krypton-client/V4.0/ext/neon.js"></script>
-        """
-
-		context.gateway_widget = """
-            <div class="wrapper">
-              <div class="checkout container">
-                <div id="payment-form" class="container">
-                  <img id="header-img" class="center" src="{{ header_img }}"></img>
-
-                  <!-- payment form -->
-                  <div class="kr-smart-button" kr-payment-method="PSE"></div>
-                  <div class="kr-smart-button" kr-payment-method="CARDS"></div>
-                  <div class="kr-smart-form" kr-form-token="{{ client_token }}"></div>
-                  <!-- error zone -->
-                  <div class="kr-form-error"></div>
-                </div>
-              </div>
-            </div>
-
-            <style>
-              .kr-smart-button {
-                margin-left: auto;
-                margin-right: auto;
-              }
-
-              .kr-form-error {
-                margin-left: auto;
-                margin-right: auto;
-              }
-
-              .kr-form-error>span {
-                margin-left: auto;
-                margin-right: auto;
-              }
-
-              #payment-form {
-                margin-top: 40px;
-              }
-
-              #header-img {
-                margin-bottom: 40px;
-                margin: auto;
-                display: block;
-              }
-            </style>
-        """

@@ -2,7 +2,6 @@
 # For license information, please see LICENSE
 
 import json
-import re
 
 import frappe
 from frappe import _
@@ -19,6 +18,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
 	from payments.controllers import PaymentController
+	from payments.payments.doctype.payment_button.payment_button import PaymentButton
 
 
 class PaymentSessionLog(Document):
@@ -30,6 +30,7 @@ class PaymentSessionLog(Document):
 	if TYPE_CHECKING:
 		from frappe.types import DF
 
+		button: DF.Data | None
 		correlation_id: DF.Data | None
 		flow_type: DF.Data | None
 		gateway: DF.Data | None
@@ -73,13 +74,15 @@ class PaymentSessionLog(Document):
 		)
 
 	def get_controller(self) -> "PaymentController":
-		"""For perfomance reasons, this is not implemented as a dynamic link but a string value
+		"""For perfomance reasons, this is not implemented as a dynamic link but a json value
 		so that it is only fetched when absolutely necessary.
-
 		"""
-		pattern = r"^(.+)\[(.+)\]$"
-		doctype, docname = re.fullmatch(pattern, self.gateway).groups()
+		d = json.loads(self.gateway)
+		doctype, docname = d["gateway_settings"], d["gateway_controller"]
 		return frappe.get_cached_doc(doctype, docname)
+
+	def get_button(self) -> "PaymentButton":
+		return frappe.get_cached_doc("Payment Button", self.button)
 
 	@staticmethod
 	def clear_old_logs(days=90):

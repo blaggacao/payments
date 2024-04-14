@@ -6,7 +6,7 @@
 
 {%- block head_include %}
 <style>	{% include "templates/styles/card_style.css" %}</style>
-{% if button_selected %}
+{% if render_widget %}
 	{{ gateway_css }}
 {% endif %}
 {% endblock -%}
@@ -27,7 +27,15 @@
 			</p>
 		{% endblock %}
 		<div id="errors" class='text-danger text-center small my-3' style='display: none;'></div>
-		{% if not button_selected %}
+		{% if render_status %}
+			<div id="errors" class='text-info text-center small my-3'>
+			  <p>{{ status }}</p>
+			</div>
+		{% endif %}
+		{% if render_widget %}
+			{{ gateway_wrapper }}
+		{% endif %}
+		{% if render_buttons %}
 			{% set primary_button = payment_buttons[0] %}
 			{% set secondary_buttons = payment_buttons[1:] %}
 			<div>
@@ -38,15 +46,13 @@
 						class='btn btn-sm btn-block btn-pay'>{{ secondary_button[0] }}&ensp;{{ secondary_button[2] }}</button></div>
 				{% endfor %}
 			</div>
-		{% else %}
-			{{ gateway_wrapper }}
 		{% endif %}
 	</div>
 </div>
 {% endblock %}
 
 {% block base_scripts %}
-{% if button_selected %}
+{% if render_widget %}
 	{{ gateway_js}}
 {% endif %}
 

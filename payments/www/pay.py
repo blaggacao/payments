@@ -47,31 +47,24 @@ def get_context(context):
 	# always
 
 	psl: PaymentSessionLog = get_psl()
-
-	# psl: PaymentSessionLog = frappe._dict({
-	#     "gateway": None,
-	#     "button": None,
-	# })
-
 	state = psl.load_state()
-
 	context.tx_data: TxData = state.tx_data
-	# context.tx_data = TxData(
-	# 	amount=12348.00,
-	# 	currency="COP",
-	# 	reference_doctype="Sales Order",
-	# 	reference_docname="SAL-ORD-2024-0001",
-	# 	payer_contact={"full_name": "Lina Avendano"},
-	# 	payer_address={},
-	# ).__dict__
 
-	if not psl.button:
-		context.button_selected = False
+	if not psl.button and psl.status not in ["Paid", "Authorized", "Processing", "Error"]:
+		context.render_widget = False
+		context.render_status = False
+		context.render_buttons = True
 		filters = {"enabled": True}
 
 		# gateway was preselected; e.g. on the backend
 		if psl.gateway:
 			filters.update(json.loads(psl.gateway))
+
+		buttons = frappe.get_list(
+			"Payment Button",
+			fields=["name", "icon", "label"],
+			filters=filters,
+		)
 
 		context.payment_buttons = [
 			(load_icon(entry.get("icon")), entry.get("name"), entry.get("label"))
@@ -82,16 +75,19 @@ def get_context(context):
 			)
 		]
 
-		# context.payment_buttons += [
-		# 	(default_icon, "Payzen Settings[Bancolombia]", "Bancolombia"),
-		# 	(default_icon, "Payzen Settings[Colpatria]", "Colpatria"),
-		# 	(default_icon, "Payzen Settings[CARDS]", "Tarjeta Credito"),
-		# 	(default_icon, "Payzen Settings[PSE]", "PSE"),
-		# ]
+	# only when button has already been selected
+	elif psl.status in ["Paid", "Authorized", "Processing", "Error"]:
+		context.render_widget = False
+		context.render_status = True
+		context.render_buttons = False
+		context.status = psl.status
 
-	# only when gateway has already been selected
 	else:
-		context.button_selected = True
+		context.render_widget = True
+		context.render_status = psl.status == "Failed"  # another chance
+		context.render_buttons = False
+		context.status = psl.status
+
 		tx_update = {}  # TODO: implement that the user may change some values
 		proceeded: Proceeded = PaymentController.proceed(psl.name, tx_update)
 

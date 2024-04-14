@@ -46,32 +46,62 @@ gateway_css = """<link rel="stylesheet" href="{{ doc.static_assets_url }}/js/kry
 </style>"""
 
 gateway_js = """<script src="{{ doc.static_assets_url }}/js/krypton-client/V4.0/stable/kr-payment-form.min.js"
-  kr-public-key="{{ doc.pub_key }}"></script>
+    kr-public-key="{{ doc.pub_key }}"></script>
 <script src="{{ doc.static_assets_url }}/js/krypton-client/V4.0/ext/neon.js"></script>
 <script type="text/javascript">
-  KR.onFormCreated(function () {
-    KR.setFormConfig({
-      smartForm: { layout: 'compact' },
-      cardForm: { layout: 'compact' },
+    KR.onFormCreated(function () {
+        KR.setFormConfig({
+            // smartForm: { layout: 'compact' },
+            cardForm: { layout: 'compact' },
+        });
+        // KR.openPaymentMethod('CARDS').then().catch()
+        // KR.hideForm()
     });
-  });
+    KR.onSubmit(paymentData => {
+		/* return values:
+		 * true: kr-post-success-url is called using POST
+		 * false: kr-post-success-url is not called, execution stops.
+		 */
+		// return false;
+		KR.hideForm(paymentData.formId)
+		frappe.call({
+			method:"payments.payment_gateways.doctype.payzen_settings.payzen_settings.notification",
+			freeze:true,
+			headers: {"X-Requested-With": "XMLHttpRequest"},
+			args: {
+				"kr-answer": JSON.stringify(paymentData.clientAnswer),
+				"kr-hash": paymentData.hash,
+				"kr-hash-algorithm": paymentData.hashAlgorithm,
+				"kr-hash-key": paymentData.hashKey,
+				"kr-answer-type": paymentData._type,
+			},
+			callback: function(r){
+				if (r.message && r.message.status == "Completed") {
+					window.location.href = r.message.redirect_to
+				}
+				else if (r.message && r.message.status == "Error") {
+					window.location.href = r.message.redirect_to
+				}
+				else if (r.message && r.message.status == "Running") {
+					window.location.href = r.message.redirect_to
+				}
+			}
+		})
+	});
 </script>"""
 
-gateway_wrapper = """<div class="wrapper">
-  <div class="checkout container">
-    <div id="payment-form" class="container">
+gateway_wrapper = """<div class="wrapper d-flex justify-content-center">
+    <div id="payment-form">
       <!-- payment form -->
-      <div class="kr-smart-button" kr-payment-method="PSE"></div>
-      <div class="kr-smart-button" kr-payment-method="CARDS"></div>
       <div
        class="kr-smart-form"
        kr-form-token="{{ payload.formToken }}"
+       kr-card-form-expanded
        kr-language="{{ frappe.lang }}"
 	  ></div>
       <!-- error zone -->
       <div class="kr-form-error"></div>
     </div>
-  </div>
 </div>"""
 
 

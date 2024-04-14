@@ -170,6 +170,7 @@ class PaymentController(Document):
 				initiated = self._initiate_mandate_acquisition()
 				psl.db_set(
 					{
+						"processing_response_payload": None,  # in case of a reset
 						"flow_type": SessionType.mandate_acquisition,
 						"correlation_id": initiated.correlation_id,
 						"mandate": f"{self.state.mandate.doctype}[{self.state.mandate.name}]",
@@ -188,6 +189,7 @@ class PaymentController(Document):
 				initiated = self._initiate_mandated_charge()
 				psl.db_set(
 					{
+						"processing_response_payload": None,  # in case of a reset
 						"flow_type": SessionType.mandated_charge,
 						"correlation_id": initiated.correlation_id,
 						"mandate": f"{self.state.mandate.doctype}[{self.state.mandate.name}]",
@@ -206,6 +208,7 @@ class PaymentController(Document):
 				initiated = self._initiate_charge()
 				psl.db_set(
 					{
+						"processing_response_payload": None,  # in case of a reset
 						"flow_type": SessionType.charge,
 						"correlation_id": initiated.correlation_id,
 					},

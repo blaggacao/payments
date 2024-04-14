@@ -413,7 +413,7 @@ def notification(**kwargs):
 	print(kr_answer_type)
 	print("+++++++++")
 
-	PaymentController.process_response(
+	return PaymentController.process_response(
 		psl_name=psl_name,
 		response=GatewayProcessingResponse(
 			hash=kr_hash,
@@ -423,4 +423,4 @@ def notification(**kwargs):
 				"data": data,
 			},
 		),
-	)
+	).__dict__

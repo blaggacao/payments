@@ -13,10 +13,8 @@
   "correlation_id",
   "flow_type",
   "tx_data",
-  "initiation_return_payload",
-  "message",
-  "traceback",
-  "response_data"
+  "initiation_response_payload",
+  "processing_response_payload"
  ],
  "fields": [
   {
@@ -33,24 +31,6 @@
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Status",
-   "read_only": 1
-  },
-  {
-   "fieldname": "message",
-   "fieldtype": "Code",
-   "label": "Message",
-   "read_only": 1
-  },
-  {
-   "fieldname": "traceback",
-   "fieldtype": "Code",
-   "label": "Traceback",
-   "read_only": 1
-  },
-  {
-   "fieldname": "response_data",
-   "fieldtype": "Code",
-   "label": "Response Data",
    "read_only": 1
   },
   {
@@ -76,12 +56,6 @@
    "read_only": 1
   },
   {
-   "fieldname": "initiation_return_payload",
-   "fieldtype": "Small Text",
-   "label": "Initiation Return Paylod",
-   "read_only": 1
-  },
-  {
    "fieldname": "flow_type",
    "fieldtype": "Data",
    "in_list_view": 1,
@@ -102,11 +76,23 @@
    "in_standard_filter": 1,
    "label": "Button",
    "read_only": 1
+  },
+  {
+   "fieldname": "initiation_response_payload",
+   "fieldtype": "Code",
+   "label": "Initiation Response Payload",
+   "read_only": 1
+  },
+  {
+   "fieldname": "processing_response_payload",
+   "fieldtype": "Code",
+   "label": "Processing Response Payload",
+   "read_only": 1
   }
  ],
  "in_create": 1,
  "links": [],
- "modified": "2024-04-13 06:52:57.845486",
+ "modified": "2024-04-13 12:11:00.671801",
  "modified_by": "Administrator",
  "module": "Payments",
  "name": "Payment Session Log",

@@ -1,12 +1,14 @@
 from dataclasses import dataclass
 from typing import Optional, Dict, List
 
+from types import MappingProxyType
+
 from frappe.model.document import Document
 
 from enum import Enum
 
 
-class PSLType(str, Enum):
+class SessionType(str, Enum):
 	"""We distinguish three distinct flow types.
 
 	They may be chained into a composed flow from the business logic, for example a
@@ -19,11 +21,29 @@ class PSLType(str, Enum):
 
 
 @dataclass
-class PSLStates:
-	sucess: list[str]
+class SessionStates:
+	"""Define gateway states in their respective category"""
+
+	success: list[str]
 	pre_authorized: list[str]
 	processing: list[str]
 	failure: list[str]
+
+
+@dataclass
+class FrontendDefaults:
+	"""Define gateway frontend defaults for css, js and the wrapper components.
+
+	All three are html snippets and jinja templates rendered against this gateway's
+	PaymentController instance and its RemoteServerInitiationPayload.
+
+	These are loaded into the Payment Button document and give users a starting point
+	to customize a gateway's payment button(s)
+	"""
+
+	gateway_css: str
+	gateway_js: str
+	gateway_wrapper: str
 
 
 class RemoteServerInitiationPayload(dict):
@@ -99,7 +119,7 @@ class Proceeded:
 	"""
 
 	integration: str
-	psltype: PSLType
+	psltype: SessionType
 	mandate: PaymentMandate | None  # TODO: will this be serialized when called from the frontend?
 	txdata: TxData
 	payload: RemoteServerInitiationPayload

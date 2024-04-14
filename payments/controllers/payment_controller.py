@@ -5,6 +5,7 @@ from urllib.parse import urlencode
 import frappe
 from frappe import _
 from frappe.model.document import Document
+from frappe.model.base_document import get_controller
 from payments.payments.doctype.payment_session_log.payment_session_log import (
 	create_log,
 )
@@ -14,6 +15,8 @@ from payments.utils import PAYMENT_SESSION_REF_KEY
 
 from types import MappingProxyType
 
+from payments.exceptions import FailedToInitiateFlowError
+
 from payments.types import (
 	Initiated,
 	TxData,
@@ -21,11 +24,12 @@ from payments.types import (
 	PSLName,
 	PaymentUrl,
 	PaymentMandate,
-	PSLType,
+	SessionType,
 	Proceeded,
 	RemoteServerInitiationPayload,
 	RemoteServerProcessingPayload,
-	PSLStates,
+	SessionStates,
+	FrontendDefaults,
 )
 
 from typing import TYPE_CHECKING, Optional
@@ -53,20 +57,28 @@ def _help_me_develop(state):
 class PaymentController(Document):
 	"""This controller implemets the public API of payment gateway controllers."""
 
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		frontend_defaults: FrontendDefaults
+		flowstates: SessionStates
+
 	def __new__(cls, *args, **kwargs):
-		assert cls.flowstates and isinstance(
-			cls.flowstates, PSLStates
+		assert hasattr(cls, "flowstates") and isinstance(
+			cls.flowstates, SessionStates
 		), """the controller must declare its flow states in `cls.flowstates`
-		and it must be an instance of payments.types.FlowStates
+		and it must be an instance of payments.types.SessionStates
 		"""
-		return super().__new__(cls, *args, **kwargs)
+		assert hasattr(cls, "frontend_defaults") and isinstance(
+			cls.frontend_defaults, FrontendDefaults
+		), """the controller must declare its flow states in `cls.frontend_defaults`
+		and it must be an instance of payments.types.FrontendDefaults
+		"""
+		return super().__new__(cls)
 
 	def __init__(self, *args, **kwargs):
-		super(Document, self).__init__(*args, **kwargs)
+		super().__init__(*args, **kwargs)
 		self.state = frappe._dict()
-
-	def load_psl(psl_name: PSLName) -> None:
-		pass
 
 	@staticmethod
 	def initiate(
@@ -95,7 +107,7 @@ class PaymentController(Document):
 		psl = create_log(
 			# gateway=f"{self.doctype}[{self.name}]",
 			tx_data=tx_data,
-			status="Initiated",
+			status="Created",
 		)
 		return psl.name
 
@@ -138,11 +150,11 @@ class PaymentController(Document):
 		psl: PaymentSessionLog = frappe.get_cached_doc("Payment Session Log", psl_name)
 		self: "PaymentController" = psl.get_controller()
 
-		psl.update_tx_data(updated_tx_data or {}, "Queued")  # commits
-
-		# tx_data = self._patch_tx_data(tx_data)  # controller specific modifications
+		psl.update_tx_data(updated_tx_data or {}, "Started")  # commits
 
 		self.state = psl.load_state()
+		# controller specific temporary modifications
+		self.state.tx_data = self._patch_tx_data(self.state.tx_data)
 		self.state.mandate: PaymentMandate = self._get_mandate()
 
 		try:
@@ -152,15 +164,16 @@ class PaymentController(Document):
 				initiated = self._initiate_mandate_acquisition()
 				psl.db_set(
 					{
-						"flow_type": PSLType.mandate_acquisition,
+						"flow_type": SessionType.mandate_acquisition,
 						"correlation_id": initiated.correlation_id,
 						"mandate": f"{self.state.mandate.doctype}[{self.state.mandate.name}]",
 					},
-					commit=True,
+					# commit=True,
 				)
+				psl.set_initiation_payload(initiated.payload, "Initiated")  # commits
 				return Proceeded(
 					integration=self.doctype,
-					psltype=PSLType.mandate_acquisition,
+					psltype=SessionType.mandate_acquisition,
 					mandate=self.state.mandate,
 					txdata=self.state.tx_data,
 					payload=initiated.payload,
@@ -169,15 +182,16 @@ class PaymentController(Document):
 				initiated = self._initiate_mandated_charge()
 				psl.db_set(
 					{
-						"flow_type": PSLType.mandated_charge,
+						"flow_type": SessionType.mandated_charge,
 						"correlation_id": initiated.correlation_id,
 						"mandate": f"{self.state.mandate.doctype}[{self.state.mandate.name}]",
 					},
-					commit=True,
+					# commit=True,
 				)
+				psl.set_initiation_payload(initiated.payload, "Initiated")  # commits
 				return Proceeded(
 					integration=self.doctype,
-					psltype=PSLType.mandated_charge,
+					psltype=SessionType.mandated_charge,
 					mandate=self.state.mandate,
 					txdata=self.state.tx_data,
 					payload=initiated.payload,
@@ -186,25 +200,34 @@ class PaymentController(Document):
 				initiated = self._initiate_charge()
 				psl.db_set(
 					{
-						"flow_type": PSLType.charge,
+						"flow_type": SessionType.charge,
 						"correlation_id": initiated.correlation_id,
 					},
-					commit=True,
+					# commit=True,
 				)
+				psl.set_initiation_payload(initiated.payload, "Initiated")  # commits
 				return Proceeded(
 					integration=self.doctype,
-					psltype=PSLType.charge,
+					psltype=SessionType.charge,
+					mandate=None,
 					txdata=self.state.tx_data,
 					payload=initiated.payload,
 				)
 
-		except Exception as e:
-			error = psl.log_error(title="Initiated Failure")
+		except FailedToInitiateFlowError as e:
+			psl.set_initiation_payload(e.data, "Error")
 			frappe.redirect_to_message(
 				_("Payment Gateway Error"),
-				_(
-					"There has been an issue with the server's configuration for {0}. Please contact customer care mentioning: {1}"
-				).format(self.name, error),
+				_("Please contact customer care mentioning: {0}").format(psl),
+				http_status_code=401,
+				indicator_color="yellow",
+			)
+			raise frappe.Redirect
+		except Exception as e:
+			error = psl.log_error(title="Unknown Initialization Failure")
+			frappe.redirect_to_message(
+				_("Payment Gateway Error"),
+				_("Please contact customer care mentioning: {0}").format(error),
 				http_status_code=401,
 				indicator_color="yellow",
 			)
@@ -338,21 +361,21 @@ class PaymentController(Document):
 			return processed
 
 		match psl.flow_type:
-			case PSLType.mandate_acquisition:
+			case SessionType.mandate_acquisition:
 				self.state.mandate: PaymentMandate = self._get_mandate()
 				processed: Processed = _process_response(
 					callable=self._process_response_for_mandate_acquisition,
 					hookmethod="on_payment_mandate_acquisition_processed",
 					psltype="mandate adquisition",
 				)
-			case PSLType.mandated_charge:
+			case SessionType.mandated_charge:
 				self.state.mandate: PaymentMandate = self._get_mandate()
 				processed: Processed = _process_response(
 					callable=self._process_response_for_mandated_charge,
 					hookmethod="on_payment_mandated_charge_processed",
 					psltype="mandated charge",
 				)
-			case PSLType.charge:
+			case SessionType.charge:
 				processed: Processed = _process_response(
 					callable=self._process_response_for_charge,
 					hookmethod="on_payment_charge_processed",
@@ -404,7 +427,6 @@ class PaymentController(Document):
 		"""
 		assert self.state.psl
 		assert self.state.tx_data
-		_help_me_develop(self.state)
 		return False
 
 	def _get_mandate(self) -> PaymentMandate:
@@ -532,3 +554,11 @@ class PaymentController(Document):
 		"""
 		_help_me_develop(self.state)
 		raise NotImplementedError
+
+
+@frappe.whitelist()
+def frontend_defaults(doctype):
+	c: PaymentController = get_controller(doctype)
+	if issubclass(c, PaymentController):
+		d: FrontendDefaults = c.frontend_defaults
+		return d.__dict__

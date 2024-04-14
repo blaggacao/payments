@@ -36,7 +36,7 @@ class PaymentButton(Document):
 	def get_assets(self, payload: RemoteServerInitiationPayload) -> (Css, Js, Wrapper):
 		"""Get the fully rendered frontend assets for this button."""
 		context = {
-			"doc": frappe.get_cached_doc(self.gateway, self.gateway_controller),
+			"doc": frappe.get_cached_doc(self.gateway_settings, self.gateway_controller),
 			"payload": payload,
 		}
 		css = frappe.render_template(self.gateway_css, context)

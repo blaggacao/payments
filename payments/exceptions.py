@@ -2,8 +2,12 @@ from frappe.exceptions import ValidationError
 
 
 class FailedToInitiateFlowError(Exception):
-	pass
+	def __init__(self, message, data):
+		self.message = message
+		self.data = data
 
 
 class PayloadIntegrityError(ValidationError):
-	pass
+	def __init__(self, message, data):
+		self.message = message
+		self.data = data

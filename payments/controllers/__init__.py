@@ -1,1 +1,1 @@
-from .payment_controller import PaymentController
+from .payment_controller import PaymentController, frontend_defaults

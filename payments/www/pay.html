@@ -15,14 +15,14 @@
 <div class='page-card'>
 	<h5 class='page-card-head text-center'>
 		<span class='indicator {{ indicator_color or "blue" }}'>
-			{{ tx_data.get("reference_docname") }}</span>
+			{{ tx_data.reference_docname }}</span>
 	</h5>
 	<div class="page-card-body">
 		{% block reference_body %}
-			{% set payer = tx_data.get("payer_contact") %}
+			{% set payer = tx_data.payer_contact %}
 			<p class="text-center">
-				{{ _("Amount") }}:&emsp;{{ frappe.utils.fmt_money(tx_data.get("amount"), currency=tx_data.get("currency")) }}</br>
-				{{ _("Document") }}:&emsp;{{ tx_data.get("reference_doctype") }}</br>
+				{{ _("Amount") }}:&emsp;{{ frappe.utils.fmt_money(tx_data.amount, currency=tx_data.currency) }}</br>
+				{{ _("Document") }}:&emsp;{{ tx_data.reference_doctype }}</br>
 				{{ _("Customer") }}:&emsp;{{ payer.get("full_name") }}</br>
 			</p>
 		{% endblock %}
@@ -31,7 +31,7 @@
 			{% set primary_button = payment_buttons[0] %}
 			{% set secondary_buttons = payment_buttons[1:] %}
 			<div>
-				<div><button id="primary-button" data-button="{{ primary_button[1] }}"
+				<div><button id="primary-button" data-button="{{ primary_button[1] }}" autofocus
 						class='btn btn-primary btn-sm btn-block btn-pay'>{{ primary_button[0] }}&ensp;{{ primary_button[2] }}</button></div>
 				{% for secondary_button in secondary_buttons %}
 				<div><button  data-button="{{ secondary_button[1] }}"
@@ -39,7 +39,7 @@
 				{% endfor %}
 			</div>
 		{% else %}
-			{{ gateway_widget }}
+			{{ gateway_wrapper }}
 		{% endif %}
 	</div>
 </div>

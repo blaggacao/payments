@@ -10,15 +10,60 @@ import json
 import frappe
 from frappe import _
 from frappe.integrations.utils import create_request_log, make_post_request
-from frappe.model.document import Document
 from frappe.utils import call_hook_method, get_url
 
 from requests.auth import HTTPBasicAuth
 
+from payments.controllers import PaymentController
 from payments.utils import create_payment_gateway
+from payments.exceptions import FailedToInitiateFlowError, PayloadIntegrityError
+
+from payments.types import (
+	TxData,
+	Initiated,
+	RemoteServerProcessingPayload,
+	SessionStates,
+	FrontendDefaults,
+)
+
+gateway_css = """<link rel="stylesheet" href="{{ doc.static_assets_url }}/js/krypton-client/V4.0/ext/neon-reset.min.css">
+<style>
+  .kr-smart-button {
+    margin-left: auto;
+    margin-right: auto;
+  }
+  .kr-form-error {
+    margin-left: auto;
+    margin-right: auto;
+  }
+  .kr-form-error>span {
+    margin-left: auto;
+    margin-right: auto;
+  }
+  #payment-form {
+    margin-top: 40px;
+  }
+</style>"""
+
+gateway_js = """<script src="{{ doc.static_assets_url }}/js/krypton-client/V4.0/stable/kr-payment-form.min.js"
+  kr-public-key="{{ doc.pub_key }}"></script>
+<script src="{{ doc.static_assets_url }}/js/krypton-client/V4.0/ext/neon.js"></script>"""
+
+gateway_wrapper = """<div class="wrapper">
+  <div class="checkout container">
+    <div id="payment-form" class="container">
+      <!-- payment form -->
+      <div class="kr-smart-button" kr-payment-method="PSE"></div>
+      <div class="kr-smart-button" kr-payment-method="CARDS"></div>
+      <div class="kr-smart-form" kr-form-token="{{ payload.formToken }}"></div>
+      <!-- error zone -->
+      <div class="kr-form-error"></div>
+    </div>
+  </div>
+</div>"""
 
 
-class PayzenSettings(Document):
+class PayzenSettings(PaymentController):
 	# begin: auto-generated types
 	# This code is auto-generated. Do not modify anything in this block.
 
@@ -46,10 +91,7 @@ class PayzenSettings(Document):
 		challenge_3ds: DF.Literal[
 			"DISABLED", "CHALLENGE_REQUESTED", "CHALLENGE_MANDATE", "NO_PREFERENCE", "AUTO"
 		]
-		gateway_css: DF.Code | None
-		gateway_js: DF.Code | None
 		gateway_name: DF.Data
-		gateway_wrapper: DF.Code | None
 		production_hmac_key: DF.Password | None
 		production_password: DF.Password | None
 		production_public_key: DF.Data | None
@@ -60,9 +102,21 @@ class PayzenSettings(Document):
 		test_public_key: DF.Data | None
 		use_sandbox: DF.Check
 	# end: auto-generated types
+
 	supported_currencies = [
 		"COP",
 	]
+	flowstates = SessionStates(
+		success=["Paid"],
+		pre_authorized=[],
+		processing=["Running"],
+		failure=["Unpaid", "Abandoned by User", "Unknown - Not Paid"],
+	)
+	frontend_defaults = FrontendDefaults(
+		gateway_css=gateway_css,
+		gateway_js=gateway_js,
+		gateway_wrapper=gateway_wrapper,
+	)
 
 	# source: https://github.com/lyra/flask-embedded-form-examples/blob/master/.env.example
 	static_urls = {
@@ -97,31 +151,52 @@ class PayzenSettings(Document):
 		"Sogecommerce": "https://api-sogecommerce.societegenerale.eu/api-payment/",
 		"Systempay": "https://api.systempay.fr/api-payment/",
 	}
+	# Field Helper
+
+	@property
+	def password(self):
+		return self.get_password(
+			fieldname="test_password" if self.use_sandbox else "production_password",
+			raise_exception=False,
+		)
+
+	@property
+	def hmac_key(self):
+		return self.get_password(
+			fieldname="test_hmac_key" if self.use_sandbox else "production_hmac_key",
+			raise_exception=False,
+		)
+
+	@property
+	def pub_key(self):
+		return self.test_public_key if self.use_sandbox else self.production_public_key
+
+	# Frappe Hooks
+
+	def before_validate(self):
+		self._set_read_only_fields()
 
 	def validate(self):
-		self.set_read_only_fields()
-		if not self.flags.ignore_mandatory:
-			self.validate_payzen_credentials()
+		self._validate_payzen_credentials()
 
 	def on_update(self):
-		create_payment_gateway(
-			"Payzen-" + self.gateway_name,
-			settings="Payzen Settings",
-			controller=self.gateway_name,
-		)
-		call_hook_method("payment_gateway_enabled", gateway="Payzen-" + self.gateway_name)
+		gateway = "Payzen-" + self.gateway_name
+		create_payment_gateway(gateway, settings="Payzen Settings", controller=self.gateway_name)
+		call_hook_method("payment_gateway_enabled", gateway=gateway)
 
-	def on_payment_request_submission(self, pr):
-		if not pr.grand_total:
-			frappe.throw(_("Payment amount cannot be 0"))
-		self.validate_transaction_currency(pr.currency)
-		return True
+	# Ref Doc Hooks
 
-	def set_read_only_fields(self):
+	def validate_tx_data(self, data):
+		self._validate_tx_data_amount(data.amount)
+		self._validate_tx_data_currency(data.currency)
+
+	# Implementations
+
+	def _set_read_only_fields(self):
 		self.api_url = self.api_urls.get(self.brand)
 		self.static_assets_url = self.static_urls.get(self.brand)
 
-	def validate_payzen_credentials(self):
+	def _validate_payzen_credentials(self):
 		def make_test_request(auth):
 			return frappe._dict(
 				make_post_request(url=f"{self.api_url}/V4/Charge/SDKTest", auth=auth, data={"value": "test"})
@@ -145,7 +220,11 @@ class PayzenSettings(Document):
 			except Exception:
 				frappe.throw(_("Could not validate production credentials."))
 
-	def validate_transaction_currency(self, currency):
+	def _validate_tx_data_amount(self, amount):
+		if not amount:
+			frappe.throw(_("Payment amount cannot be 0"))
+
+	def _validate_tx_data_currency(self, currency):
 		if currency not in self.supported_currencies:
 			frappe.throw(
 				_(
@@ -153,220 +232,114 @@ class PayzenSettings(Document):
 				).format(currency)
 			)
 
-	def get_payment_url(self, **kwargs):
-		url = frappe.get_doc(
-			{
-				"doctype": "Shortener",
-				"long_url": get_url(f"./payzen_checkout?{urlencode(kwargs)}"),
-			}
-		)
-		url.insert(ignore_permissions=True)
-		return url.short_url
+	# Gateway Lifecyle Hooks
 
-	def get_fields_for_rendering_context(self):
-		pubkey = self.test_public_key if self.use_sandbox else self.production_public_key
-		return {
-			"static_assets_url": self.static_assets_url,
-			"header_img": self.header_img,
-			"kr_public_key": f"{self.shop_id}:{pubkey}",
+	## Preflight
+
+	def _patch_tx_data(self, tx_data: TxData) -> TxData:
+		# payzen requires this to be in the smallest denomination of a currency
+		# TODO: needs to be modified if other currencies are implemented
+		tx_data.amount = int(tx_data.amount * 100)  # hardcoded: COP factor
+		return tx_data
+
+	## Initiation
+	def _initiate_charge(self) -> Initiated:
+		tx_data = self.state.tx_data
+		psl = self.state.psl
+		data = {
+			# payzen receives values in the currency's smallest denomination
+			"amount": tx_data.amount,
+			"currency": tx_data.currency,
+			"orderId": tx_data.reference_docname,
+			"customer": {
+				"reference": tx_data.payer_contact.get("full_name"),
+			},
+			"strongAuthentication": self.challenge_3ds,
+			"contrib": f"ERPNext/{self.name}",
+			"ipnTargetUrl": get_url(
+				"./api/method/payments.payment_gateways.doctype.payzen_settings.payzen_settings.notification"
+			),
+			"metadata": {
+				"psl": psl.name,
+				"reference_doctype": tx_data.reference_doctype,
+				"reference_docname": tx_data.reference_docname,
+			},
 		}
 
-	def finalize_payment_request(self, data, hash, reference_doctype, reference_docname):
-		key = self.get_password(
-			fieldname="test_hmac_key" if self.use_sandbox else "production_hmac_key",
-			raise_exception=False,
+		if email_id := tx_data.payer_contact.get("email_id"):
+			data["customer"]["email"] = email_id
+
+		res = make_post_request(
+			url=f"{self.api_url}/V4/Charge/CreatePayment",
+			auth=HTTPBasicAuth(self.shop_id, self.password),
+			json=data,
 		)
-		signature = compute_hmac_sha256_signature(key, data)
-
-		data = frappe._dict(json.loads(data))
-		reportedOrderStatus = data.orderStatus
-		validatedOrderStatus = reportedOrderStatus if hash == signature else False
-
-		# If answer is forged, return early
-		if hash != signature:
-			return {"redirect_to": "payment-failed", "status": "Error"}
-
-		integration_request = frappe.get_last_doc(
-			"Integration Request",
-			filters={"reference_doctype": reference_doctype, "reference_docname": reference_docname},
-		)
-		metadata = frappe._dict(json.loads(integration_request.data).get("metadata"))
-
-		redirect_to = metadata.get("redirect_to") or None
-		redirect_message = metadata.get("redirect_message") or None
-
-		if not redirect_to:
-			try:
-				redirect_to = frappe.get_doc(
-					reference_doctype,
-					reference_docname,
-				).run_method("on_payment_authorized_redirect")
-			except Exception:
-				pass
-
-		if integration_request.status == "Completed" or validatedOrderStatus == "PAID":
-			status = "Completed"
-			redirect_url = f"payment-success?doctype={reference_doctype}&docname={reference_docname}"
-			redirect_message = redirect_message or _(
-				f"Your {reference_doctype} ({reference_docname}) was successfully paid."
+		if not res.get("status") == "SUCCESS":
+			raise FailedToInitiateFlowError(
+				_("didn't return SUCCESS", context="Payments Gateway Exception"),
+				data=res,
 			)
-		elif validatedOrderStatus == "RUNNING":
-			status = "Running"
-			redirect_url = "payment-running"
-		else:  # UNPAID / ABANDONED
-			status = "Error"
-			redirect_url = "payment-failed"
-
-		if redirect_to:
-			param = urlencode({"redirect_to": redirect_to})
-			redirect_url += ("?" if "?" not in redirect_url else "&") + param
-
-		if redirect_message:
-			param = urlencode({"redirect_message": redirect_message})
-			redirect_url += ("?" if "?" not in redirect_url else "&") + param
-
-		return {"redirect_to": redirect_url, "status": status}
-
-
-def get_gateway_controller(reference_doctype, reference_docname):
-	doc = frappe.get_doc(reference_doctype, reference_docname)
-	gateway_controller = frappe.db.get_value(
-		"Payment Gateway", doc.payment_gateway, "gateway_controller"
-	)
-	return gateway_controller
-
-
-def get_form_token(reference_doctype, reference_docname, form):
-	gateway_controller = get_gateway_controller(reference_doctype, reference_docname)
-	settings = frappe.get_doc("Payzen Settings", gateway_controller)
-
-	data = {
-		"amount": form["amount"],
-		"currency": form["currency"],
-		"orderId": form["order_id"],
-		"customer": {
-			"reference": form["payer_name"],
-		},
-		"strongAuthentication": settings.challenge_3ds,
-		"contrib": f"ERPNext/{gateway_controller}",
-		"ipnTargetUrl": get_url(
-			"./api/method/payments.payment_gateways.doctype.payzen_settings.payzen_settings.notification"
-		),
-		"metadata": {
-			"reference_doctype": reference_doctype,
-			"reference_docname": reference_docname,
-		},
-	}
-
-	if form.get("payer_email"):
-		data["customer"]["email"] = form["payer_email"]
-
-	if not frappe.db.exists("Integration Request", reference_docname, cache=True):
-		integration_request = create_request_log(
-			data,
-			url=f"{settings.api_url}/V4/Charge/CreatePayment",
-			name=reference_docname,
-			service_name="Payzen",
-			reference_doctype=reference_doctype,
-			reference_docname=reference_docname,
-		)
-	else:
-		integration_request = frappe.get_last_doc(
-			"Integration Request",
-			filters={"reference_doctype": reference_doctype, "reference_docname": reference_docname},
+		return Initiated(
+			correlation_id=res["ticket"],
+			payload=res["answer"],  # we're after its '.formToken'
 		)
 
-	res = make_post_request(
-		url=integration_request.url,
-		auth=HTTPBasicAuth(
-			settings.shop_id,
-			settings.get_password(
-				fieldname="test_password" if settings.use_sandbox else "production_password",
-				raise_exception=False,
-			),
-		),
-		json=data,
-	)
+	## Response Processing
 
-	return res
+	def _validate_response_payload(self):
+		payload = self.state.response_payload
+		hash = payload.get("hash")
+		data = payload.get("data")
+		signature = hmac.new(str.encode(self.hmac_key), str.encode(data), hashlib.sha256).hexdigest()
+		if hash != signature:
+			raise PayloadIntegrityError()
 
+	def _process_response_for_charge(self):
+		psl, tx_data, payload = self.state.psl, self.state.tx_data, self.state.response_payload
+		data = payload.get("data")
 
-def compute_hmac_sha256_signature(key, message):
-	"""
-	`key` argument is the password of the store
-	`message` argument is all the arguments concatenated, plus the password store
-	"""
-	byte_key = str.encode(key)
-	message = str.encode(message)
-	signature = hmac.new(byte_key, message, hashlib.sha256).hexdigest()
-	return signature
+		orderStatus = data.get("orderStatus")
+
+		if orderStatus == "PAID":
+			self.flags.status_changed_to = "Paid"
+		elif orderStatus == "RUNNING":
+			self.flags.status_changed_to = "Running"
+		elif orderStatus == "UNPAID":
+			self.flags.status_changed_to = "Unpaid"
+		elif orderStatus == "ABANDONED":
+			self.flags.status_changed_to = "Abandoned by User"
+		else:
+			self.flags.status_changed_to = "Unknown - Not Paid"
+
+	def _render_failure_message(self):
+		psl, tx_data, payload = self.state.psl, self.state.tx_data, self.state.response_payload
+		data = payload.get("data")
+		txDetails = data["transactions"][0]
+		errcode = txDetails.get("detailedErrorCode", "NO ERROR CODE")
+		errdetail = txDetails.get("detailedErrorMessage", "no detail")
+		return _("Payzen Error Code: {}\nError Detail: {errdetail}").format(errcode, errdetail)
 
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])
 def notification(**kwargs):
 	kr_hash = kwargs["kr-hash"]
-	kr_hash_key = kwargs["kr-hash-key"]
-	kr_hash_algorithm = kwargs["kr-hash-algorithm"]
 	kr_answer = kwargs["kr-answer"]
 	kr_answer_type = kwargs["kr-answer-type"]
 
+	_kr_hash_key = kwargs["kr-hash-key"]
+	_kr_hash_algorithm = kwargs["kr-hash-algorithm"]
+
+	if kr_answer_type != "V4/Payment":  # TODO: implemet more
+		return
 	if not kr_answer:
 		return
 
-	# Validate signature for given payment order id (= Payment Request)
-	data = frappe._dict(json.loads(kr_answer))
-	tx = data.transactions[0]
-	metadata = frappe._dict(tx.get("metadata"))
-	reference_doctype, reference_docname = metadata.reference_doctype, metadata.reference_docname
-	gateway_controller = get_gateway_controller(reference_doctype, reference_docname)
-	settings = frappe.get_doc("Payzen Settings", gateway_controller)
-	key = settings.get_password(
-		fieldname="test_password" if settings.use_sandbox else "production_password",
-		raise_exception=False,
+	PaymentController.process_response(
+		psl_name="",
+		payload=RemoteServerProcessingPayload(
+			{
+				"data": kr_answer,
+				"hash": kr_hash,
+			}
+		),
 	)
-
-	signature = compute_hmac_sha256_signature(key, kr_answer)
-	if not kr_hash == signature:
-		return
-
-	# Answer is valid
-
-	integration_request = frappe.get_last_doc(
-		"Integration Request",
-		filters={"reference_doctype": reference_doctype, "reference_docname": reference_docname},
-	)
-	if integration_request.status == "Completed":
-		return
-
-	if data.orderStatus == "PAID":
-		integration_request.handle_success(data)
-		try:
-			frappe.get_doc(
-				reference_doctype,
-				reference_docname,
-			).run_method("on_payment_authorized", integration_request.status)
-		except Exception as e:
-			frappe.log_error(
-				"on_payment_authorized() failed",
-				frappe.get_traceback(),
-				reference_doctype,
-				reference_docname,
-			)
-	elif data.orderStatus == "RUNNING":
-		integration_request.db_set("output", json.dumps(data))
-	else:
-		integration_request.handle_failure(data)
-		try:
-			txDetails = data["transactions"][0]
-			frappe.get_doc(reference_doctype, reference_docname,).run_method(
-				"on_payment_failed",
-				integration_request.status,
-				f"{txDetails.get('detailedErrorCode', 'NO ERROR CODE')}: {txDetails.get('detailedErrorMessage', 'no detail')}",
-			)
-		except Exception as e:
-			frappe.log_error(
-				"on_payment_failed() failed",
-				frappe.get_traceback(),
-				reference_doctype,
-				reference_docname,
-			)

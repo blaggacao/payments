@@ -11,9 +11,7 @@ from frappe.query_builder.functions import Now
 from frappe.utils import strip_html
 from frappe.utils.data import cstr
 
-from types import MappingProxyType
-
-from payments.types import TxData
+from payments.types import TxData, RemoteServerInitiationPayload, RemoteServerProcessingPayload
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -34,27 +32,50 @@ class PaymentSessionLog(Document):
 		correlation_id: DF.Data | None
 		flow_type: DF.Data | None
 		gateway: DF.Data | None
-		initiation_return_payload: DF.SmallText | None
+		initiation_response_payload: DF.Code | None
 		mandate: DF.Data | None
-		message: DF.Code | None
-		response_data: DF.Code | None
+		processing_response_payload: DF.Code | None
 		status: DF.Data | None
 		title: DF.Data | None
-		traceback: DF.Code | None
 		tx_data: DF.Code | None
 	# end: auto-generated types
 	def update_tx_data(self, tx_data: TxData, status: str) -> None:
 		data = json.loads(self.tx_data)
 		data.update(tx_data)
-		self.tx_data = frappe.as_json(data)
-		self.status = status
-		self.save(ignore_permissions=True)
-		frappe.db.commit()
+		self.db_set(
+			{
+				"tx_data": frappe.as_json(data),
+				"status": status,
+			},
+			commit=True,
+		)
+
+	def set_initiation_payload(
+		self, initiation_payload: RemoteServerInitiationPayload, status: str
+	) -> None:
+		self.db_set(
+			{
+				"initiation_response_payload": frappe.as_json(initiation_payload),
+				"status": status,
+			},
+			commit=True,
+		)
+
+	def set_processing_payload(
+		self, processing_payload: RemoteServerProcessingPayload, status: str
+	) -> None:
+		self.db_set(
+			{
+				"processing_response_payload": frappe.as_json(processing_payload),
+				"status": status,
+			},
+			commit=True,
+		)
 
 	def load_state(self):
 		return frappe._dict(
-			psl=MappingProxyType(self.as_dict()),
-			tx_data=MappingProxyType(json.loads(self.tx_data)),
+			psl=frappe._dict(self.as_dict()),
+			tx_data=TxData(**json.loads(self.tx_data)),
 		)
 
 	def get_controller(self) -> "PaymentController":

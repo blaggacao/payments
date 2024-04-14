@@ -1,7 +1,7 @@
 frappe.ready(function() {
 
 	// Focus the first button
-	document.getElementById("primary-button").focus();
+	// document.getElementById("primary-button").focus();
 
 	// Get all button elements
 	const buttons = Array.from(document.getElementsByClassName('btn-pay'));

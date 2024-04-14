@@ -101,4 +101,4 @@ def get_context(context):
 		css, js, wrapper = button.get_assets(payload)
 		context.gateway_css = css
 		context.gateway_js = js
-		context.gateway_html = wrapper
+		context.gateway_wrapper = wrapper

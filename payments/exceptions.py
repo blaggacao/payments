@@ -8,6 +8,16 @@ class FailedToInitiateFlowError(Exception):
 
 
 class PayloadIntegrityError(ValidationError):
-	def __init__(self, message, data):
+	pass
+
+
+class PaymentControllerProcessingError(Exception):
+	def __init__(self, message, psltype):
 		self.message = message
-		self.data = data
+		self.psltype = psltype
+
+
+class RefDocHookProcessingError(Exception):
+	def __init__(self, message, psltype):
+		self.message = message
+		self.psltype = psltype

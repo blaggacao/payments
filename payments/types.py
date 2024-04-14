@@ -57,7 +57,7 @@ class RemoteServerInitiationPayload(dict):
 	pass
 
 
-@dataclass
+@dataclass(frozen=True)
 class Initiated:
 	"""The return data structure from a gateway flow initiation.
 
@@ -89,7 +89,8 @@ class TxData:
 	# TODO: tx data for subscriptions, pre-authorized, require-mandate and other flows
 
 
-class RemoteServerProcessingPayload(dict):
+@dataclass(frozen=True)
+class GatewayProcessingResponse:
 	"""The remote server payload returned during flow processing.
 
 	Interface: Remote Server -> Concrete Gateway Implementation
@@ -97,7 +98,9 @@ class RemoteServerProcessingPayload(dict):
 	           Payment Gateway Controller -> Payment Gateway Controller
 	"""
 
-	pass
+	hash: bytes | None
+	message: bytes | None
+	payload: dict
 
 
 class PaymentMandate(Document):
@@ -137,7 +140,7 @@ class _Processed:
 	message:
 	    a (translated) message to show to the user
 	action:
-	    an action dictionary that is understood by the fronted | TODO: type it, too
+	    an action for the frontend to perfom | TODO: type it, too
 	"""
 
 	message: str
@@ -145,32 +148,28 @@ class _Processed:
 
 
 @dataclass
-class Processed:
+class Processed(_Processed):
 	"""The return data structure after processing gateway response.
 
 	Interface:
 	Payment Gateway Controller -> Calling Buisness Flow (backend or frontend)
-	Payment Gateway Controller -> Calling Buisness Flow (backend or frontend)
 
 	Implementation Note:
-	If the Ref Doc exposes a hook method, this should return Processed, if implemented
-	via a server action you may aproximate by using frappe._dict.
+	If the Ref Doc exposes a hook method, this should return _Processed, instead.
 
-	gateway:
-	    The name of the integration so that the control flow can case switch on it
 	message:
 	    a (translated) message to show to the user
 	action:
-	    an action dictionary that is understood by the fronted | TODO: type it, too
+	    an action for the frontend to perfom | TODO: type it, too
+	status_changed_to:
+	    the new status of the payment session after processing
 	payload:
 	    a gateway specific payload that is understood by a gateway-specific frontend
 	    implementation
 	"""
 
-	gateway: str
-	message: str
-	action: dict
-	payload: RemoteServerProcessingPayload
+	status_changed_to: str
+	payload: GatewayProcessingResponse
 
 
 # for nicer DX using an LSP

@@ -29,7 +29,6 @@ frappe.ready(function() {
 				},
 				error_msg: "#errors",
 	      callback: (r) => {
-	        // Handle the response from the backend
 					if (r.message.reload) {
 						window.location.reload();
 					}

@@ -11,7 +11,7 @@ from frappe.query_builder.functions import Now
 from frappe.utils import strip_html
 from frappe.utils.data import cstr
 
-from payments.types import TxData, RemoteServerInitiationPayload, RemoteServerProcessingPayload
+from payments.types import TxData, RemoteServerInitiationPayload, GatewayProcessingResponse
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -30,6 +30,7 @@ class PaymentSessionLog(Document):
 
 		button: DF.Data | None
 		correlation_id: DF.Data | None
+		failure_reason: DF.Data | None
 		flow_type: DF.Data | None
 		gateway: DF.Data | None
 		initiation_response_payload: DF.Code | None
@@ -62,11 +63,11 @@ class PaymentSessionLog(Document):
 		)
 
 	def set_processing_payload(
-		self, processing_payload: RemoteServerProcessingPayload, status: str
+		self, processing_response: GatewayProcessingResponse, status: str
 	) -> None:
 		self.db_set(
 			{
-				"processing_response_payload": frappe.as_json(processing_payload),
+				"processing_response_payload": frappe.as_json(processing_response.payload),
 				"status": status,
 			},
 			commit=True,

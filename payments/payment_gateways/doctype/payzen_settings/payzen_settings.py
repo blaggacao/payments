@@ -21,7 +21,7 @@ from payments.exceptions import FailedToInitiateFlowError, PayloadIntegrityError
 from payments.types import (
 	TxData,
 	Initiated,
-	RemoteServerProcessingPayload,
+	GatewayProcessingResponse,
 	SessionStates,
 	FrontendDefaults,
 )
@@ -47,7 +47,15 @@ gateway_css = """<link rel="stylesheet" href="{{ doc.static_assets_url }}/js/kry
 
 gateway_js = """<script src="{{ doc.static_assets_url }}/js/krypton-client/V4.0/stable/kr-payment-form.min.js"
   kr-public-key="{{ doc.pub_key }}"></script>
-<script src="{{ doc.static_assets_url }}/js/krypton-client/V4.0/ext/neon.js"></script>"""
+<script src="{{ doc.static_assets_url }}/js/krypton-client/V4.0/ext/neon.js"></script>
+<script type="text/javascript">
+  KR.onFormCreated(function () {
+    KR.setFormConfig({
+      smartForm: { layout: 'compact' },
+      cardForm: { layout: 'compact' },
+    });
+  });
+</script>"""
 
 gateway_wrapper = """<div class="wrapper">
   <div class="checkout container">
@@ -55,7 +63,11 @@ gateway_wrapper = """<div class="wrapper">
       <!-- payment form -->
       <div class="kr-smart-button" kr-payment-method="PSE"></div>
       <div class="kr-smart-button" kr-payment-method="CARDS"></div>
-      <div class="kr-smart-form" kr-form-token="{{ payload.formToken }}"></div>
+      <div
+       class="kr-smart-form"
+       kr-form-token="{{ payload.formToken }}"
+       kr-language="{{ frappe.lang }}"
+	  ></div>
       <!-- error zone -->
       <div class="kr-form-error"></div>
     </div>
@@ -155,21 +167,27 @@ class PayzenSettings(PaymentController):
 
 	@property
 	def password(self):
-		return self.get_password(
-			fieldname="test_password" if self.use_sandbox else "production_password",
-			raise_exception=False,
+		return str.encode(
+			self.get_password(
+				fieldname="test_password" if self.use_sandbox else "production_password",
+				raise_exception=False,
+			)
 		)
 
 	@property
 	def hmac_key(self):
-		return self.get_password(
-			fieldname="test_hmac_key" if self.use_sandbox else "production_hmac_key",
-			raise_exception=False,
+		return str.encode(
+			self.get_password(
+				fieldname="test_hmac_key" if self.use_sandbox else "production_hmac_key",
+				raise_exception=False,
+			)
 		)
 
 	@property
 	def pub_key(self):
-		return self.test_public_key if self.use_sandbox else self.production_public_key
+		return (
+			f"{self.shop_id}:{self.test_public_key if self.use_sandbox else self.production_public_key}"
+		)
 
 	# Frappe Hooks
 
@@ -264,6 +282,7 @@ class PayzenSettings(PaymentController):
 				"reference_doctype": tx_data.reference_doctype,
 				"reference_docname": tx_data.reference_docname,
 			},
+			"paymentMethods": ["CARDS"],
 		}
 
 		if email_id := tx_data.payer_contact.get("email_id"):
@@ -286,19 +305,32 @@ class PayzenSettings(PaymentController):
 
 	## Response Processing
 
-	def _validate_response_payload(self):
-		payload = self.state.response_payload
-		hash = payload.get("hash")
-		data = payload.get("data")
-		signature = hmac.new(str.encode(self.hmac_key), str.encode(data), hashlib.sha256).hexdigest()
-		if hash != signature:
+	def _validate_response(self):
+		response: GatewayProcessingResponse = self.state.response
+		type = response.payload.get("type")
+		if type == "V4/Charge/ProcessPaymentAnswer":
+			key = self.hmac_key
+		elif type == "V4/Payment":
+			key = self.password
+		else:
+			raise PayloadIntegrityError()
+		signature = hmac.new(
+			key,
+			response.message,
+			hashlib.sha256,
+		).hexdigest()
+		if response.hash != signature:
 			raise PayloadIntegrityError()
 
 	def _process_response_for_charge(self):
-		psl, tx_data, payload = self.state.psl, self.state.tx_data, self.state.response_payload
-		data = payload.get("data")
+		psl, tx_data = self.state.psl, self.state.tx_data
+		response: GatewayProcessingResponse = self.state.response
+		data = response.payload.get("data")
 
 		orderStatus = data.get("orderStatus")
+		print("+++++++++")
+		print(orderStatus)
+		print("---------")
 
 		if orderStatus == "PAID":
 			self.flags.status_changed_to = "Paid"
@@ -312,12 +344,18 @@ class PayzenSettings(PaymentController):
 			self.flags.status_changed_to = "Unknown - Not Paid"
 
 	def _render_failure_message(self):
-		psl, tx_data, payload = self.state.psl, self.state.tx_data, self.state.response_payload
-		data = payload.get("data")
+		psl, tx_data = self.state.psl, self.state.tx_data
+		response: GatewayProcessingResponse = self.state.response
+		data = response.payload.get("data")
+
 		txDetails = data["transactions"][0]
 		errcode = txDetails.get("detailedErrorCode", "NO ERROR CODE")
 		errdetail = txDetails.get("detailedErrorMessage", "no detail")
-		return _("Payzen Error Code: {}\nError Detail: {errdetail}").format(errcode, errdetail)
+		return _("Payzen Error Code: {}\nError Detail: {}").format(errcode, errdetail)
+
+	def _is_server_to_server(self):
+		response: GatewayProcessingResponse = self.state.response
+		return "V4/Payment" == response.payload.get("type")
 
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])
@@ -329,17 +367,30 @@ def notification(**kwargs):
 	_kr_hash_key = kwargs["kr-hash-key"]
 	_kr_hash_algorithm = kwargs["kr-hash-algorithm"]
 
-	if kr_answer_type != "V4/Payment":  # TODO: implemet more
+	if kr_answer_type not in [
+		"V4/Payment",  # IPN
+		"V4/Charge/ProcessPaymentAnswer",  # Client Flow
+	]:  # TODO: implemet more
 		return
 	if not kr_answer:
 		return
 
+	data = json.loads(kr_answer)
+	tx1 = data["transactions"][0]
+	psl_name = tx1["metadata"]["psl"]
+
+	print("---------")
+	print(kr_answer_type)
+	print("+++++++++")
+
 	PaymentController.process_response(
-		psl_name="",
-		payload=RemoteServerProcessingPayload(
-			{
-				"data": kr_answer,
-				"hash": kr_hash,
-			}
+		psl_name=psl_name,
+		response=GatewayProcessingResponse(
+			hash=kr_hash,
+			message=str.encode(kr_answer),
+			payload={
+				"type": kr_answer_type,
+				"data": data,
+			},
 		),
 	)

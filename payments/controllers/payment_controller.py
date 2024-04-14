@@ -15,11 +15,17 @@ from payments.utils import PAYMENT_SESSION_REF_KEY
 
 from types import MappingProxyType
 
-from payments.exceptions import FailedToInitiateFlowError
+from payments.exceptions import (
+	FailedToInitiateFlowError,
+	PayloadIntegrityError,
+	PaymentControllerProcessingError,
+	RefDocHookProcessingError,
+)
 
 from payments.types import (
 	Initiated,
 	TxData,
+	_Processed,
 	Processed,
 	PSLName,
 	PaymentUrl,
@@ -27,17 +33,17 @@ from payments.types import (
 	SessionType,
 	Proceeded,
 	RemoteServerInitiationPayload,
-	RemoteServerProcessingPayload,
+	GatewayProcessingResponse,
 	SessionStates,
 	FrontendDefaults,
 )
 
 from typing import TYPE_CHECKING, Optional
+from payments.payments.doctype.payment_session_log.payment_session_log import (
+	PaymentSessionLog,
+)
 
 if TYPE_CHECKING:
-	from payments.payments.doctype.payment_session_log.payment_session_log import (
-		PaymentSessionLog,
-	)
 	from payments.payments.doctype.payment_gateway.payment_gateway import PaymentGateway
 
 
@@ -233,8 +239,121 @@ class PaymentController(Document):
 			)
 			raise frappe.Redirect
 
+	def __process_response(
+		self,
+		psl: PaymentSessionLog,
+		response: GatewayProcessingResponse,
+		ref_doc: Document,
+		callable,
+		hookmethod,
+		psltype,
+	) -> Processed | None:
+		processed = None
+		try:
+			processed = callable()  # idempotent on second run
+		except Exception:
+			raise PaymentControllerProcessingError(f"{callable} failed", psltype)
+
+		assert self.flags.status_changed_to in (
+			self.flowstates.success
+			+ self.flowstates.pre_authorized
+			+ self.flowstates.processing
+			+ self.flowstates.failure
+		), "self.flags.status_changed_to must be in the set of possible states for this controller:\n - {}".format(
+			"\n - ".join(
+				self.flowstates.success
+				+ self.flowstates.pre_authorized
+				+ self.flowstates.processing
+				+ self.flowstates.failure
+			)
+		)
+
+		ret = {
+			"status_changed_to": self.flags.status_changed_to,
+			"payload": response.payload,
+			"action": {"redirect_to": "/"},
+		}
+
+		try:
+			if res := ref_doc.run_method(
+				hookmethod,
+				self.state,
+				MappingProxyType(self.flags),
+			):
+				# type check the result value on user implementations
+				processed = Processed(**(ret | _Processed(**res).__dict__))
+		except Exception:
+			# raise RefDocHookProcessingError(f"{hookmethod} failed", psltype)
+			pass
+
+		if self.flags.status_changed_to in self.flowstates.success:
+			psl.set_processing_payload(response, "Paid")
+			processed = processed or Processed(
+				message=_("Payment {} succeeded").format(psltype),
+				**ret,
+			)
+		elif self.flags.status_changed_to in self.flowstates.pre_authorized:
+			psl.set_processing_payload(response, "Authorized")
+			processed = processed or Processed(
+				message=_("Payment {} authorized").format(psltype),
+				**ret,
+			)
+		elif self.flags.status_changed_to in self.flowstates.processing:
+			psl.set_processing_payload(response, "Processing")
+			processed = processed or Processed(
+				message=_("Payment {} awaiting further processing by the bank").format(psltype),
+				**ret,
+			)
+		elif self.flags.status_changed_to in self.flowstates.failure:
+			psl.db_set("failure_reason", self._render_failure_message())
+			psl.set_processing_payload(response, "Failed")  # commits
+			processed = processed or Processed(
+				message=_("Payment {} failed").format(psltype),
+				**ret,
+			)
+
+		return processed
+
+	def _process_response(
+		self, psl: PaymentSessionLog, response: GatewayProcessingResponse, ref_doc: Document
+	) -> Processed:
+		self._validate_response()
+
+		match psl.flow_type:
+			case SessionType.mandate_acquisition:
+				self.state.mandate: PaymentMandate = self._get_mandate()
+				processed: Processed = self.__process_response(
+					psl=psl,
+					response=response,
+					ref_doc=ref_doc,
+					callable=self._process_response_for_mandate_acquisition,
+					hookmethod="on_payment_mandate_acquisition_processed",
+					psltype="mandate adquisition",
+				)
+			case SessionType.mandated_charge:
+				self.state.mandate: PaymentMandate = self._get_mandate()
+				processed: Processed = self.__process_response(
+					psl=psl,
+					response=response,
+					ref_doc=ref_doc,
+					callable=self._process_response_for_mandated_charge,
+					hookmethod="on_payment_mandated_charge_processed",
+					psltype="mandated charge",
+				)
+			case SessionType.charge:
+				processed: Processed = self.__process_response(
+					psl=psl,
+					response=response,
+					ref_doc=ref_doc,
+					callable=self._process_response_for_charge,
+					hookmethod="on_payment_charge_processed",
+					psltype="charge",
+				)
+
+		return processed
+
 	@staticmethod
-	def process_response(psl_name: PSLName, payload: RemoteServerProcessingPayload) -> Processed:
+	def process_response(psl_name: PSLName, response: GatewayProcessingResponse) -> Processed:
 		"""Call this from the controlling business logic; either backend or frontens.
 
 		It will recover the correct controller and dispatch the correct processing based on data that is at this
@@ -242,148 +361,77 @@ class PaymentController(Document):
 
 		payload:
 		    this is a signed, sensitive response containing the payment status; the signature is validated prior
-		    to processing by controller._validate_response_payload
+		    to processing by controller._validate_response
 		"""
 
 		psl: PaymentSessionLog = frappe.get_cached_doc("Payment Session Log", psl_name)
 		self: "PaymentController" = psl.get_controller()
 
+		# guard against already currently being processed payloads via another entrypoint
+		if psl.is_locked:
+			psl.lock(timeout=5)  # allow ample 5 seconds to finish
+			psl.reload()
+		else:
+			psl.lock()
+
 		self.state = psl.load_state()
-		self.state.response_payload = MappingProxyType(payload)
-		# guard against already processed or currently being processed payloads via another entrypoint
+		self.state.response = response
+
+		ref_doc = frappe.get_doc(
+			self.state.tx_data.reference_doctype,
+			self.state.tx_data.reference_docname,
+		)
+
+		mute = self._is_server_to_server()
 		try:
-			psl.lock(timeout=3)  # max processing allowance of alternative flow
-		except frappe.DocumentLockedError:
-			return self.state.tx_data.get("saved_return_value")
-
-		try:
-			self._validate_response_payload()
-		except Exception:
-			error = psl.log_error("Response validation failure")
-			frappe.redirect_to_message(
-				_("Server Error"),
-				_("There's been an issue with your payment."),
-				http_status_code=500,
-				indicator_color="red",
-			)
-
-		ref_doc = frappe.get_doc(psl.reference_doctype, psl.reference_docname)
-
-		def _process_response(callable, hookmethod, psltype) -> Processed:
-			processed = None
-			try:
-				processed = callable()
-			except Exception:
-				error = psl.log_error(f"Processing failure ({psltype})")
-				psl.handle_failure(self.state.response_payload)
-				frappe.redirect_to_message(
-					_("Server Error"),
-					_error_value(error, psltype),
-					http_status_code=500,
-					indicator_color="red",
-				)
-
-			assert (
-				self.flags.status_changed_to
-			), f"_process_response_for_{psltype} must set self.flags.status_changed_to"
-
-			try:
-				if ref_doc.hasattr(hookmethod):
-					if res := ref_doc.run_method(hookmethod, MappingProxyType(self.flags), self.state):
-						processed = Processed(gateway=self.name, **res)
-			except Exception:
-				error = psl.log_error(f"Processing failure ({psltype} - refdoc hook)")
-				frappe.redirect_to_message(
-					_("Server Error"),
-					_error_value(error, f"{psltype} (via ref doc hook)"),
-					http_status_code=500,
-					indicator_color="red",
-				)
-
-			_state_list = (
-				self.flowstates.success
-				+ self.flowstates.pre_authorized
-				+ self.flowstates.processing
-				+ self.flowstates.failure
-			)
-
-			assert (
-				self.flags.status_changed_to in _state_list
-			), """
-			self.flags.status_changed_to must be in the set of possible states for this controller:
-			 - {}
-			""".format(
-				"\n - ".join(_state_list)
-			)
-
-			if self.flags.status_changed_to in self.flowstates.success:
-				psl.handle_success(self.state.response_payload)
-				processed = processed or Processed(
-					gateway=self.name,
-					message=_("Payment {} succeeded").format(psltype),
-					action={"redirect_to": "/"},
-					payload=None,
-				)
-			elif self.flags.status_changed_to in self.flowstates.pre_authorized:
-				psl.handle_success(self.state.response_payload)
-				psl.db_set("status", "Authorized", update_modified=False)
-				processed = processed or Processed(
-					gateway=self.name,
-					message=_("Payment {} authorized").format(psltype),
-					action={"redirect_to": "/"},
-					payload=None,
-				)
-			elif self.flags.status_changed_to in self.flowstates.processing:
-				psl.handle_success(self.state.response_payload)
-				psl.db_set("status", "Waiting", update_modified=False)
-				processed = processed or Processed(
-					gateway=self.name,
-					message=_("Payment {} awaiting further processing by the bank").format(psltype),
-					action={"redirect_to": "/"},
-					payload=None,
-				)
-			elif self.flags.status_changed_to in self.flowstates.failure:
-				psl.handle_failure(self.state.response_payload)
+			processed = self._process_response(psl, response, ref_doc)
+			if self.flags.status_changed_to in self.flowstates.failure:
+				msg = self._render_failure_message()
+				psl.db_set("failure_reason", msg, commit=True)
 				try:
-					if ref_doc.hasattr("on_payment_failed"):
-						msg = self._render_failure_message()
-						status = self.flags.status_changed_to
-						ref_doc.run_method("on_payment_failed", status, msg)
+					status = self.flags.status_changed_to
+					ref_doc.run_method("on_payment_failed", status, msg)
 				except Exception:
-					error = psl.log_error("Setting failure message on ref doc failed")
-				processed = processed or Processed(
-					gateway=self.name,
-					message=_("Payment {} failed").format(psltype),
-					action={"redirect_to": "/"},
-					payload=None,
-				)
+					psl.log_error("Setting failure message on ref doc failed")
 
+		except PayloadIntegrityError:
+			error = psl.log_error("Response validation failure")
+			if not mute:
+				frappe.redirect_to_message(
+					_("Server Error"),
+					_("There's been an issue with your payment."),
+					http_status_code=500,
+					indicator_color="red",
+				)
+				raise frappe.Redirect
+
+		except PaymentControllerProcessingError as e:
+			error = psl.log_error(f"Processing error ({e.psltype})")
+			psl.set_processing_payload(response, "Error")
+			if not mute:
+				frappe.redirect_to_message(
+					_("Server Error"),
+					_error_value(error, e.psltype),
+					http_status_code=500,
+					indicator_color="red",
+				)
+				raise frappe.Redirect
+
+		except RefDocHookProcessingError as e:
+			error = psl.log_error(f"Processing failure ({e.psltype} - refdoc hook)")
+			psl.set_processing_payload(response, "Error - RefDoc")
+			if not mute:
+				frappe.redirect_to_message(
+					_("Server Error"),
+					_error_value(error, f"{e.psltype} (via ref doc hook)"),
+					http_status_code=500,
+					indicator_color="red",
+				)
+				raise frappe.Redirect
+		else:
 			return processed
-
-		match psl.flow_type:
-			case SessionType.mandate_acquisition:
-				self.state.mandate: PaymentMandate = self._get_mandate()
-				processed: Processed = _process_response(
-					callable=self._process_response_for_mandate_acquisition,
-					hookmethod="on_payment_mandate_acquisition_processed",
-					psltype="mandate adquisition",
-				)
-			case SessionType.mandated_charge:
-				self.state.mandate: PaymentMandate = self._get_mandate()
-				processed: Processed = _process_response(
-					callable=self._process_response_for_mandated_charge,
-					hookmethod="on_payment_mandated_charge_processed",
-					psltype="mandated charge",
-				)
-			case SessionType.charge:
-				processed: Processed = _process_response(
-					callable=self._process_response_for_charge,
-					hookmethod="on_payment_charge_processed",
-					psltype="charge",
-				)
-
-		psl.update_status({"saved_return_value": processed.__dict__}, psl.status)
-		return processed
+		finally:
+			psl.unlock()
 
 	# Lifecycle hooks (contracts)
 	#  - imeplement them for your controller
@@ -440,7 +488,6 @@ class PaymentController(Document):
 		"""
 		assert self.state.psl
 		assert self.state.tx_data
-		_help_me_develop(self.state)
 		return None
 
 	def _create_mandate(self) -> PaymentMandate:
@@ -493,13 +540,13 @@ class PaymentController(Document):
 		_help_me_develop(self.state)
 		raise NotImplementedError
 
-	def _validate_response_payload(self) -> None:
+	def _validate_response(self) -> None:
 		"""Implement how the validation of the response signature
 
 		Implementations can read:
 		- self.state.psl
 		- self.state.tx_data
-		- self.state.response_payload
+		- self.state.response
 		"""
 		_help_me_develop(self.state)
 		raise NotImplementedError
@@ -507,10 +554,12 @@ class PaymentController(Document):
 	def _process_response_for_mandate_acquisition(self) -> Processed | None:
 		"""Implement how the controller should process mandate acquisition responses
 
+		Needs to be idenmpotent.
+
 		Implementations can read:
 		- self.state.psl
 		- self.state.tx_data
-		- self.state.response_payload
+		- self.state.response
 
 		Implementations can read/write:
 		- self.state.mandate
@@ -521,10 +570,12 @@ class PaymentController(Document):
 	def _process_response_for_mandated_charge(self) -> Processed | None:
 		"""Implement how the controller should process mandated charge responses
 
+		Needs to be idenmpotent.
+
 		Implementations can read:
 		- self.state.psl
 		- self.state.tx_data
-		- self.state.response_payload
+		- self.state.response
 
 		Implementations can read/write:
 		- self.state.mandate
@@ -535,10 +586,12 @@ class PaymentController(Document):
 	def _process_response_for_charge(self) -> Processed | None:
 		"""Implement how the controller should process charge responses
 
+		Needs to be idenmpotent.
+
 		Implementations can read:
 		- self.state.psl
 		- self.state.tx_data
-		- self.state.response_payload
+		- self.state.response
 		"""
 		_help_me_develop(self.state)
 		raise NotImplementedError
@@ -549,8 +602,17 @@ class PaymentController(Document):
 		Implementations can read:
 		- self.state.psl
 		- self.state.tx_data
-		- self.state.response_payload
+		- self.state.response
 		- self.state.mandate; if mandate is involved
+		"""
+		_help_me_develop(self.state)
+		raise NotImplementedError
+
+	def _is_server_to_server(self):
+		"""Extract a readable failure message out of the server response
+
+		Implementations can read:
+		- self.state.response
 		"""
 		_help_me_develop(self.state)
 		raise NotImplementedError

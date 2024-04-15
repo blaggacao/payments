@@ -14,7 +14,7 @@
 {%- block content -%}
 <div class='page-card'>
 	<h5 class='page-card-head text-center'>
-		<span class='indicator {{ indicator_color or "blue" }}'>
+		<span id="refdoc-indicator" class='indicator {{ indicator_color or "blue" }}'>
 			{{ tx_data.reference_docname }}</span>
 	</h5>
 	<div class="page-card-body">
@@ -26,16 +26,24 @@
 				{{ _("Customer") }}:&emsp;{{ payer.get("full_name") }}</br>
 			</p>
 		{% endblock %}
-		<div id="errors" class='text-danger text-center small my-3' style='display: none;'></div>
-		{% if render_status %}
-			<div id="errors" class='text-info text-center small my-3'>
-			  <p>{{ status }}</p>
-			</div>
-		{% endif %}
+		<hr/>
+		<p class="text-center">
+		<span id="status-wrapper" {% if not status or False %} style='display: none;'{% endif %}>
+		  {{ _("Status") }}: <span id="status"
+		  class='indicator-pill no-indicator-dot whitespace-nowrap {{ indicator_color or "blue" }}'
+		>{{ status or "" }}</span></span>
+		<span id="message-wrapper" style='display: none;'><br/>
+		  {{ _("Note") }}: <span id="message"></span></span>
+		</p>
 		{% if render_widget %}
+			<a id="action"
+				class='btn btn-primary btn-sm btn-block btn-pay'
+				style='display: none;'
+			></a>
 			{{ gateway_wrapper }}
 		{% endif %}
 		{% if render_buttons %}
+			<div id="select-button-errors" class='text-danger text-center small my-3' style='display: none;'></div>
 			{% set primary_button = payment_buttons[0] %}
 			{% set secondary_buttons = payment_buttons[1:] %}
 			<div>

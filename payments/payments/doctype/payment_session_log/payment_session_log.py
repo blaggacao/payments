@@ -30,7 +30,7 @@ class PaymentSessionLog(Document):
 
 		button: DF.Data | None
 		correlation_id: DF.Data | None
-		failure_reason: DF.Data | None
+		decline_reason: DF.Data | None
 		flow_type: DF.Data | None
 		gateway: DF.Data | None
 		initiation_response_payload: DF.Code | None

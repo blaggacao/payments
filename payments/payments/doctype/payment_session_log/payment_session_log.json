@@ -7,7 +7,7 @@
  "field_order": [
   "title",
   "status",
-  "failure_reason",
+  "decline_reason",
   "button",
   "flow_type",
   "gateway",
@@ -91,17 +91,17 @@
    "read_only": 1
   },
   {
-   "fieldname": "failure_reason",
+   "fieldname": "decline_reason",
    "fieldtype": "Data",
    "in_list_view": 1,
    "in_standard_filter": 1,
-   "label": "Failure Reason",
+   "label": "Decline Reason",
    "read_only": 1
   }
  ],
  "in_create": 1,
  "links": [],
- "modified": "2024-04-14 16:40:11.029266",
+ "modified": "2024-04-15 07:16:05.889449",
  "modified_by": "Administrator",
  "module": "Payments",
  "name": "Payment Session Log",

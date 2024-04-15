@@ -27,7 +27,7 @@ frappe.ready(function() {
 					pslName: pslName,
 					buttonName: buttonData,
 				},
-				error_msg: "#errors",
+				error_msg: "#select-button-errors",
 	      callback: (r) => {
 					if (r.message.reload) {
 						window.location.reload();
@@ -37,3 +37,30 @@ frappe.ready(function() {
 	  });
 	});
 });
+
+$(document).on("payload-processed", function (e, r) {
+	if (r.message.status_changed_to) {
+		const status = r.message.status_changed_to;
+		const color = r.message.indicator_color;
+		const pill = $("#status");
+		pill.html(status);
+		pill.addClass(color)
+		$("#status-wrapper").toggle(true)
+		const indicator = $("#refdoc-indicator");
+		indicator.removeClass(function(_, className) {
+			return className.match(/blue|red/g).join(" ");
+		});
+		indicator.addClass(color);
+	}
+	if (r.message.message) {
+		$("#message").html(r.message.message).toggle(true)
+		$("#message-wrapper").toggle(true)
+	}
+	if (r.message.action) {
+		const cta = $("#action");
+		cta.html(r.message.action.label)
+		cta.attr("href", r.message.action.href)
+		cta.toggle(true)
+		cta.focus()
+	}
+})

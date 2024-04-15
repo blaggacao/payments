@@ -40,9 +40,6 @@ gateway_css = """<link rel="stylesheet" href="{{ doc.static_assets_url }}/js/kry
     margin-left: auto;
     margin-right: auto;
   }
-  #payment-form {
-    margin-top: 40px;
-  }
 </style>"""
 
 gateway_js = """<script src="{{ doc.static_assets_url }}/js/krypton-client/V4.0/stable/kr-payment-form.min.js"
@@ -55,18 +52,11 @@ gateway_js = """<script src="{{ doc.static_assets_url }}/js/krypton-client/V4.0/
             cardForm: { layout: 'compact' },
         });
         // KR.openPaymentMethod('CARDS').then().catch()
-        // KR.hideForm()
     });
     KR.onSubmit(paymentData => {
-		/* return values:
-		 * true: kr-post-success-url is called using POST
-		 * false: kr-post-success-url is not called, execution stops.
-		 */
-		// return false;
-		KR.hideForm(paymentData.formId)
 		frappe.call({
 			method:"payments.payment_gateways.doctype.payzen_settings.payzen_settings.notification",
-			freeze:true,
+			freeze: true,
 			headers: {"X-Requested-With": "XMLHttpRequest"},
 			args: {
 				"kr-answer": JSON.stringify(paymentData.clientAnswer),
@@ -75,18 +65,9 @@ gateway_js = """<script src="{{ doc.static_assets_url }}/js/krypton-client/V4.0/
 				"kr-hash-key": paymentData.hashKey,
 				"kr-answer-type": paymentData._type,
 			},
-			callback: function(r){
-				if (r.message && r.message.status == "Completed") {
-					window.location.href = r.message.redirect_to
-				}
-				else if (r.message && r.message.status == "Error") {
-					window.location.href = r.message.redirect_to
-				}
-				else if (r.message && r.message.status == "Running") {
-					window.location.href = r.message.redirect_to
-				}
-			}
+			callback: (r) => $(document).trigger("payload-processed", r),
 		})
+		KR.hideForm(paymentData.formId)
 	});
 </script>"""
 
@@ -152,7 +133,7 @@ class PayzenSettings(PaymentController):
 		success=["Paid"],
 		pre_authorized=[],
 		processing=["Running"],
-		failure=["Unpaid", "Abandoned by User", "Unknown - Not Paid"],
+		declined=["Unpaid", "Abandoned by User", "Unknown - Not Paid"],
 	)
 	frontend_defaults = FrontendDefaults(
 		gateway_css=gateway_css,
@@ -314,6 +295,9 @@ class PayzenSettings(PaymentController):
 			},
 			"paymentMethods": ["CARDS"],
 		}
+		print("---------")
+		print(data["ipnTargetUrl"])
+		print("---------")
 
 		if email_id := tx_data.payer_contact.get("email_id"):
 			data["customer"]["email"] = email_id

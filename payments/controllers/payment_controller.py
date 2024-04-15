@@ -6,6 +6,8 @@ import frappe
 from frappe import _
 from frappe.model.document import Document
 from frappe.model.base_document import get_controller
+from frappe.email.doctype.email_account.email_account import EmailAccount
+from frappe.desk.form.load import get_automatic_email_link, get_document_email
 from payments.payments.doctype.payment_session_log.payment_session_log import (
 	create_log,
 )
@@ -36,6 +38,7 @@ from payments.types import (
 	GatewayProcessingResponse,
 	SessionStates,
 	FrontendDefaults,
+	ActionAfterProcessed,
 )
 
 from typing import TYPE_CHECKING, Optional
@@ -261,20 +264,19 @@ class PaymentController(Document):
 			self.flowstates.success
 			+ self.flowstates.pre_authorized
 			+ self.flowstates.processing
-			+ self.flowstates.failure
+			+ self.flowstates.declined
 		), "self.flags.status_changed_to must be in the set of possible states for this controller:\n - {}".format(
 			"\n - ".join(
 				self.flowstates.success
 				+ self.flowstates.pre_authorized
 				+ self.flowstates.processing
-				+ self.flowstates.failure
+				+ self.flowstates.declined
 			)
 		)
 
 		ret = {
 			"status_changed_to": self.flags.status_changed_to,
 			"payload": response.payload,
-			"action": {"redirect_to": "/"},
 		}
 
 		try:
@@ -284,34 +286,57 @@ class PaymentController(Document):
 				MappingProxyType(self.flags),
 			):
 				# type check the result value on user implementations
-				processed = Processed(**(ret | _Processed(**res).__dict__))
+				res["action"] = ActionAfterProcessed(**res.get("action", {})).__dict__
+				_res = _Processed(**res)
+				processed = Processed(**(ret | _res.__dict__))
 		except Exception:
 			# raise RefDocHookProcessingError(f"{hookmethod} failed", psltype)
 			pass
 
 		if self.flags.status_changed_to in self.flowstates.success:
 			psl.set_processing_payload(response, "Paid")
+			ret["indicator_color"] = "green"
 			processed = processed or Processed(
-				message=_("Payment {} succeeded").format(psltype),
+				message=_("{} succeeded").format(psltype.title()),
+				action=dict(href="/", label=_("Go to Homepage")),
 				**ret,
 			)
 		elif self.flags.status_changed_to in self.flowstates.pre_authorized:
 			psl.set_processing_payload(response, "Authorized")
+			ret["indicator_color"] = "green"
 			processed = processed or Processed(
-				message=_("Payment {} authorized").format(psltype),
+				message=_("{} authorized").format(psltype.title()),
+				action=dict(href="/", label=_("Go to Homepage")),
 				**ret,
 			)
 		elif self.flags.status_changed_to in self.flowstates.processing:
 			psl.set_processing_payload(response, "Processing")
+			ret["indicator_color"] = "yellow"
 			processed = processed or Processed(
-				message=_("Payment {} awaiting further processing by the bank").format(psltype),
+				message=_("{} awaiting further processing by the bank").format(psltype.title()),
+				action=dict(href="/", label=_("Refresh")),
 				**ret,
 			)
-		elif self.flags.status_changed_to in self.flowstates.failure:
-			psl.db_set("failure_reason", self._render_failure_message())
-			psl.set_processing_payload(response, "Failed")  # commits
+		elif self.flags.status_changed_to in self.flowstates.declined:
+			psl.db_set("decline_reason", self._render_failure_message())
+			psl.set_processing_payload(response, "Declined")  # commits
+			ret["indicator_color"] = "red"
+			incoming_email = None
+			if automatic_linking_email := get_automatic_email_link():
+				incoming_email = get_document_email(
+					self.state.tx_data.reference_doctype,
+					self.state.tx_data.reference_docname,
+				)
+			if incoming_email := incoming_email or EmailAccount.find_default_incoming():
+				subject = _("Payment declined for: {}").format(self.state.tx_data.reference_docname)
+				body = _("Please help me with ref '{}'").format(psl.name)
+				href = "mailto:{incoming_email.email_id}?subject={subject}"
+				action = dict(href=href, label=_("Email Us"))
+			else:
+				action = dict(href=self.get_payment_url(psl.name), label=_("Refresh"))
 			processed = processed or Processed(
-				message=_("Payment {} failed").format(psltype),
+				message=_("{} declined").format(psltype.title()),
+				action=action,
 				**ret,
 			)
 
@@ -388,7 +413,7 @@ class PaymentController(Document):
 		mute = self._is_server_to_server()
 		try:
 			processed = self._process_response(psl, response, ref_doc)
-			if self.flags.status_changed_to in self.flowstates.failure:
+			if self.flags.status_changed_to in self.flowstates.declined:
 				msg = self._render_failure_message()
 				psl.db_set("failure_reason", msg, commit=True)
 				try:

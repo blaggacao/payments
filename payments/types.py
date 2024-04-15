@@ -27,7 +27,7 @@ class SessionStates:
 	success: list[str]
 	pre_authorized: list[str]
 	processing: list[str]
-	failure: list[str]
+	declined: list[str]
 
 
 @dataclass
@@ -129,6 +129,12 @@ class Proceeded:
 
 
 @dataclass
+class ActionAfterProcessed:
+	href: str
+	label: str
+
+
+@dataclass
 class _Processed:
 	"""The return data structure after processing gateway response (by a Ref Doc hook).
 
@@ -144,7 +150,7 @@ class _Processed:
 	"""
 
 	message: str
-	action: dict
+	action: dict  # checked against ActionAfterProcessed
 
 
 @dataclass
@@ -163,12 +169,15 @@ class Processed(_Processed):
 	    an action for the frontend to perfom | TODO: type it, too
 	status_changed_to:
 	    the new status of the payment session after processing
+	indicator_color:
+	    the new indicator color for visual display of the new status
 	payload:
 	    a gateway specific payload that is understood by a gateway-specific frontend
 	    implementation
 	"""
 
 	status_changed_to: str
+	indicator_color: str
 	payload: GatewayProcessingResponse
 
 

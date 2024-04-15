@@ -52,7 +52,6 @@ def get_context(context):
 
 	if not psl.button and psl.status not in ["Paid", "Authorized", "Processing", "Error"]:
 		context.render_widget = False
-		context.render_status = False
 		context.render_buttons = True
 		filters = {"enabled": True}
 
@@ -76,17 +75,26 @@ def get_context(context):
 		]
 
 	# only when button has already been selected
-	elif psl.status in ["Paid", "Authorized", "Processing", "Error"]:
+	# keep in sync with payment_controller.py
+	elif psl.status in ["Paid", "Authorized", "Processing", "Error", "Error - RefDoc"]:
 		context.render_widget = False
-		context.render_status = True
 		context.render_buttons = False
 		context.status = psl.status
+		match psl.status:
+			case "Paid":
+				context.indicator_color = "green"
+			case "Authorized":
+				context.indicator_color = "green"
+			case "Processing":
+				context.indicator_color = "yellow"
+			case "Error":
+				context.indicator_color = "red"
+			case "Error - RefDoc":
+				context.indicator_color = "red"
 
 	else:
 		context.render_widget = True
-		context.render_status = psl.status == "Failed"  # another chance
 		context.render_buttons = False
-		context.status = psl.status
 
 		tx_update = {}  # TODO: implement that the user may change some values
 		proceeded: Proceeded = PaymentController.proceed(psl.name, tx_update)

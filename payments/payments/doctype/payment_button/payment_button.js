@@ -11,7 +11,7 @@ frappe.ui.form.on('Payment Button', {
 					frm.set_value('gateway_js', r.message.gateway_js)
 					frm.set_value('gateway_wrapper', r.message.gateway_wrapper)
 				}
-      })
+			})
 		}
 	}
 });

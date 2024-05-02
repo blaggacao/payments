@@ -163,7 +163,18 @@ def make_custom_fields():
 					"reqd": 1,
 					"insert_after": "disabled",
 				}
-			]
+			],
+			"Payment Request": [
+				{
+					"fieldname": "payment_session_log",
+					"fieldtype": "Link",
+					"in_list_view": 1,
+					"label": "Payment Session Log",
+					"options": "Payment Session Log",
+					"read_only": 1,
+					"insert_after": "payment_url",
+				}
+			],
 		}
 
 		create_custom_fields(custom_fields)

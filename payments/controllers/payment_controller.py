@@ -91,7 +91,7 @@ class PaymentController(Document):
 
 	@staticmethod
 	def initiate(
-		payment_gateway_name: str, tx_data: TxData, correlation_id: str | None, name: str | None
+		tx_data: TxData, payment_gateway_name: str | None, correlation_id: str | None, name: str | None
 	) -> PSLName:
 		"""Initiate a payment flow from Ref Doc with the given gateway.
 

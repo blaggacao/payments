@@ -89,36 +89,48 @@ class PaymentController(Document):
 		super().__init__(*args, **kwargs)
 		self.state = frappe._dict()
 
+	@overload
 	@staticmethod
 	def initiate(
-		tx_data: TxData, payment_gateway_name: str | None, correlation_id: str | None, name: str | None
+		tx_data: TxData, gateway: str, correlation_id: str | None, name: str | None
 	) -> PSLName:
+		...
+
+	@staticmethod
+	def initiate(
+		tx_data: TxData, gateway: PaymentController | None, correlation_id: str | None, name: str | None
+	) -> (PaymentController, PSLName):
 		"""Initiate a payment flow from Ref Doc with the given gateway.
 
 		Inheriting methods can invoke super and then set e.g. correlation_id on self.state.psl to save
 		and early-obtained correlation id from the payment gateway or to initiate the user flow if delegated to
 		the controller (see: is_user_flow_initiation_delegated)
 		"""
-		gateway: PaymentGateway = frappe.get_cached_doc("Payment Gateway", payment_gateway_name)
+		if isinstance(gateway, str):
+			payment_gateway: PaymentGateway = frappe.get_cached_doc("Payment Gateway", gateway)
 
-		if not gateway.gateway_controller and not gateway.gateway_settings:
-			frappe.throw(
-				_(
-					"{0} is not fully configured, both Gateway Settings and Gateway Controller need to be set"
-				).format(payment_gateway_name)
+			if not payment_gateway.gateway_controller and not payment_gateway.gateway_settings:
+				frappe.throw(
+					_(
+						"{0} is not fully configured, both Gateway Settings and Gateway Controller need to be set"
+					).format(gateway)
+				)
+
+			self = frappe.get_cached_doc(
+				payment_gateway.gateway_settings,
+				payment_gateway.gateway_controller or payment_gateway.gateway_settings,  # may be a singleton
 			)
+		else:
+			self = gateway
 
-		self = frappe.get_cached_doc(
-			gateway.gateway_settings,
-			gateway.gateway_controller or gateway.gateway_settings,  # may be a singleton
-		)
+		self.validate_tx_data(tx_data)  # preflight check
 
 		psl = create_log(
-			# gateway=f"{self.doctype}[{self.name}]",
 			tx_data=tx_data,
 			status="Created",
+			controller=self,
 		)
-		return psl.name
+		return self, psl.name
 
 	@staticmethod
 	def get_payment_url(psl_name: PSLName) -> PaymentUrl | None:

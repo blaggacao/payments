@@ -137,57 +137,22 @@ def select_button(pslName: str = None, buttonName: str = None) -> str:
 
 
 def create_log(
-	gateway: str,
 	tx_data: TxData,
-	status: str = "Initiated",
-	# response_data=None,
-	# request_data=None,
-	# exception=None,
-	# rollback=False,
-	# method=None,
-	# message=None,
-	# make_new=False,
+	status: str = "Created",
+	controller: "PaymentController" | None,
 ) -> PaymentSessionLog:
-	# make_new = make_new or not bool(frappe.flags.request_id)
 
-	# if rollback:
-	# frappe.db.rollback()
+	log = frappe.new_doc("Payment Session Log")
+	log.tx_data = frappe.as_json(tx_data)
+	log.status = status
+	if controller:
+		log.gateway = json.dumps({
+			"gateway_settings": controller.doctype,
+			"gateway_controller": controller.name,
+		})                         	
 
-	if True:  # make_new:
-		log = frappe.new_doc("Payment Session Log")
-		log.gateway = gateway
-		log.tx_data = frappe.as_json(tx_data)
-		log.status = status
-		log.insert(ignore_permissions=True)
-	else:
-		log = frappe.get_doc("Payment Session Log", frappe.flags.request_id)
-
-	# if response_data and not isinstance(response_data, str):
-	# 	response_data = json.dumps(response_data, sort_keys=True, indent=4)
-
-	# if request_data and not isinstance(request_data, str):
-	# 	request_data = json.dumps(request_data, sort_keys=True, indent=4)
-
-	# log.message = message or _get_message(exception)
-	# log.method = log.method or method
-	# log.response_data = response_data or log.response_data
-	# log.request_data = request_data or log.request_data
-	# log.traceback = log.traceback or frappe.get_traceback()
-	# log.status = status
-	# log.save(ignore_permissions=True)
-
-	frappe.db.commit()
-
+	log.insert(ignore_permissions=True)
 	return log
-
-
-def _get_message(exception):
-	if hasattr(exception, "message"):
-		return strip_html(exception.message)
-	elif hasattr(exception, "__str__"):
-		return strip_html(exception.__str__())
-	else:
-		return _("Something went wrong while syncing")
 
 
 @frappe.whitelist()
